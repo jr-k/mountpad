@@ -82,7 +82,7 @@ func (db *DB) Now() time.Time { return time.Now().UTC() }
 var ErrNotFound = errors.New("not found")
 
 // ensureSQLiteParentDir extracts the file path from a SQLite DSN
-// (e.g. "file:/data/mountpad.db?_pragma=foreign_keys(1)") and
+// (e.g. "file:/db/mountpad.db?_pragma=foreign_keys(1)") and
 // creates the parent directory if missing. The modernc.org/sqlite driver
 // does not create intermediate directories on its own.
 func ensureSQLiteParentDir(dsn string) error {

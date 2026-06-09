@@ -56,7 +56,7 @@ func ListDir(dirAbs string, manifestFilename string, showManifests bool) ([]DirE
 			}
 			// Defensive hide for the legacy `.mountpad` directory that
 			// used to host the SQLite DB inside a user-facing /storage
-			// mount. New installs put the DB on a dedicated /data
+			// mount. New installs put the DB on a dedicated /db
 			// volume, but operators upgrading from older builds may
 			// still have a `.mountpad/` folder lying around - keep it
 			// invisible in the explorer so the dotfile doesn't surface
