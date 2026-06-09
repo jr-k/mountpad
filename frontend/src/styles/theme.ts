@@ -5,6 +5,15 @@
 // places that need to tweak rendering depending on luminosity (e.g. the
 // CodeMirror editor wrapper) branch without reverse-engineering the colors.
 
+// Appearance is the discriminator both palettes share. Declaring it as
+// a union (rather than `as const` on each palette) keeps `typeof
+// darkTheme` and `typeof lightTheme` structurally identical, which in
+// turn lets `Theme = typeof darkTheme` accept the light palette too.
+// An interface can extend Theme (single object literal) but NOT a
+// union, so this discipline is what keeps the styled-components
+// `DefaultTheme` augmentation valid.
+export type Appearance = 'light' | 'dark'
+
 const sharedTokens = {
   space: {
     0:  '0',
@@ -61,7 +70,7 @@ const sharedTokens = {
 } as const
 
 export const darkTheme = {
-  appearance: 'dark' as const,
+  appearance: 'dark' as Appearance,
   color: {
     bg:        '#0d1117',
     bgSubtle:  '#11161f',
@@ -92,13 +101,13 @@ export const darkTheme = {
     lg: '0 20px 40px rgba(0,0,0,0.40)',
   },
   ...sharedTokens,
-} as const
+}
 
 // Light palette: high-contrast, slightly cool, mirrors GitHub-ish neutrals so
 // muted text stays legible. The accent stays in the same blue family as the
 // dark theme to keep brand cohesion across modes.
 export const lightTheme = {
-  appearance: 'light' as const,
+  appearance: 'light' as Appearance,
   color: {
     bg:        '#f6f8fa',
     bgSubtle:  '#ffffff',
@@ -131,7 +140,7 @@ export const lightTheme = {
     lg: '0 20px 40px rgba(31,35,40,0.14)',
   },
   ...sharedTokens,
-} as const
+}
 
 // Backwards-compat alias: a few non-React modules (e.g. the CodeMirror editor
 // theme builder) used to import `theme` directly. Keeping the export pointed
@@ -139,4 +148,9 @@ export const lightTheme = {
 // to `useTheme()` from styled-components.
 export const theme = darkTheme
 
+// Theme = typeof darkTheme works for both palettes because the
+// outer object literals are NOT `as const`: colour values widen to
+// `string`, and `appearance` is widened to `Appearance` at the
+// source. lightTheme structurally matches the same type, so
+// ThemeManager can swap palettes without a cast.
 export type Theme = typeof darkTheme

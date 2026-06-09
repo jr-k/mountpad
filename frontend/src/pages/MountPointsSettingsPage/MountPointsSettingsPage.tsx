@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useTheme } from 'styled-components'
+import { usePage } from '@inertiajs/react'
 import { AppShell } from '@/layouts/AppShell'
 import { Button } from '@/components/Button'
 import { Input } from '@/components/Input'
@@ -12,6 +13,7 @@ import { Avatar, AvatarColorPicker } from '@/components/Avatar'
 import { api, HttpError } from '@/lib/api'
 import { formatMode, modeToOctal } from '@/lib/permissions'
 import type { MountPoint } from '@/types/files'
+import type { SharedProps } from '@/types/inertia'
 import type { Theme } from '@/styles/theme'
 import { SP } from '@/layouts/SettingsPage'
 
@@ -42,11 +44,14 @@ interface MountForm {
   default_mode: number
   /** Empty string = use the deterministic palette derived from the id. */
   avatar_color: string
+  /** Per-mount override of MOUNTPAD_FOLLOW_SYMLINK. */
+  follow_symlinks: boolean
 }
 
 const emptyForm: MountForm = {
   slug: '', name: '', description: '', host_path: '',
   is_active: true, default_mode: 0o750, avatar_color: '',
+  follow_symlinks: true,
 }
 
 const formFromMount = (m: MountPoint): MountForm => ({
@@ -57,6 +62,9 @@ const formFromMount = (m: MountPoint): MountForm => ({
   is_active: m.is_active,
   default_mode: m.default_mode,
   avatar_color: m.avatar_color ?? '',
+  // Default to true for legacy rows that may not yet have the
+  // column populated (or for safety when the API contract changes).
+  follow_symlinks: m.follow_symlinks ?? true,
 })
 
 // slugify normalises a display name into a URL-safe slug:
@@ -73,6 +81,13 @@ const slugify = (input: string): string =>
 
 const MountPointsSettingsPage: React.FC = () => {
   const t = useTheme() as Theme
+  // Global MOUNTPAD_FOLLOW_SYMLINK exposed by the Inertia share-props
+  // pipeline. The runtime check is `global && per-mount`, so when the
+  // global flag is off the per-mount checkbox is effectively a no-op
+  // - we render it disabled with a hint instead of letting the admin
+  // toggle a setting that won't have any effect.
+  const { props } = usePage<SharedProps & Record<string, unknown>>()
+  const globalFollowSymlinks = !!props.app?.follow_symlinks
   const [mounts, setMounts] = useState<MountPoint[]>([])
 
   // `null` = modal closed. `'new'` = creating. A MountPoint value = editing it.
@@ -213,12 +228,19 @@ const MountPointsSettingsPage: React.FC = () => {
                       <td><SP.RowNum>{idx + 1}</SP.RowNum></td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <Avatar
-                            id={m.id}
-                            color={m.avatar_color}
-                            labels={[m.name, m.slug]}
-                            size={28}
-                          />
+                          <SP.AvatarButton
+                            type="button"
+                            onClick={() => openEdit(m)}
+                            title={`Edit ${m.name}`}
+                            aria-label={`Edit ${m.name}`}
+                          >
+                            <Avatar
+                              id={m.id}
+                              color={m.avatar_color}
+                              labels={[m.name, m.slug]}
+                              size={28}
+                            />
+                          </SP.AvatarButton>
                           <SP.LinkCell
                             type="button"
                             onClick={() => openEdit(m)}
@@ -355,6 +377,34 @@ const MountPointsSettingsPage: React.FC = () => {
                 onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
               />
               Active &middot; visible in the workspace sidebar
+            </label>
+            <label
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'flex-start',
+                fontSize: 13,
+                color: t.color.textMuted,
+                marginTop: 4,
+                opacity: globalFollowSymlinks ? 1 : 0.55,
+                cursor: globalFollowSymlinks ? 'pointer' : 'not-allowed',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={form.follow_symlinks}
+                disabled={!globalFollowSymlinks}
+                onChange={(e) => setForm({ ...form, follow_symlinks: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span>Follow symbolic links inside this mount</span>
+                <span style={{ fontSize: 12, color: t.color.textMuted }}>
+                  {globalFollowSymlinks
+                    ? 'Uncheck to keep this mount strict. Useful for user-writable trees where a planted symlink could escape the root.'
+                    : 'Symbolic links are disabled server-wide.'}
+                </span>
+              </span>
             </label>
             {err && (
               <div style={{

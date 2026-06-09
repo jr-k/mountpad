@@ -21,7 +21,7 @@ export const ModalOverlay = styled.div`
 `
 
 // Dialog uses a flex column so the Header + Footer stay pinned and
-// the Body grows to fill what's left — with `min-height: 0` enabling
+// the Body grows to fill what's left - with `min-height: 0` enabling
 // the inner overflow rule. `max-height: 92vh` (mirroring the 92vw
 // width cap) prevents the dialog from ever exceeding the viewport,
 // so long content scrolls inside the body rather than running off
@@ -50,7 +50,7 @@ export const Header = styled.header`
 
 // Body is the scroll container. `min-height: 0` is the standard
 // flexbox incantation that lets `overflow-y: auto` actually clip
-// children — without it a flex item refuses to shrink below the
+// children - without it a flex item refuses to shrink below the
 // height of its content and the scrollbar never appears.
 export const Body = styled.div`
   padding: ${({ theme }) => `${theme.space[5]}`};

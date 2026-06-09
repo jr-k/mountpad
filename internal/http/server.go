@@ -95,6 +95,7 @@ func NewRouter(d *Deps) http.Handler {
 			r.Route("/fs/{mountId}", func(r chi.Router) {
 				r.Get("/list", fsH.List)
 				r.Get("/read", fsH.Read)
+				r.Get("/download", fsH.Download)
 				r.Put("/write", fsH.Write)
 				r.Post("/file", fsH.CreateFile)
 				r.Post("/directory", fsH.CreateDir)

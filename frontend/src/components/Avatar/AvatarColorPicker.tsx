@@ -17,7 +17,7 @@ interface AvatarColorPickerProps {
  * Swatch grid used by every "pick an avatar color" form (profile,
  * mount settings, eventually groups). The leading "auto" swatch
  * clears the user's pick and falls back to the deterministic
- * palette entry derived from the entity id — same behaviour as
+ * palette entry derived from the entity id - same behaviour as
  * `resolveAvatarColor` on the rendering side.
  *
  * Kept inside the Avatar package because the swatch list IS the
@@ -33,6 +33,10 @@ export const AvatarColorPicker: React.FC<AvatarColorPickerProps> = ({
       <S.SwatchAuto
         type="button"
         $size={size}
+        /* `$color` is required by the base Swatch type but SwatchAuto
+           paints its own stripe gradient, so any value works - we
+           pass `transparent` to be explicit about it being ignored. */
+        $color="transparent"
         $active={norm === ''}
         onClick={() => onChange('')}
         title="Use the automatic color"

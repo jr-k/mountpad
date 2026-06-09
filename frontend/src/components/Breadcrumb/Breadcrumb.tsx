@@ -17,7 +17,7 @@ interface BreadcrumbProps {
   isFile?: boolean
   /**
    * Label for the root crumb. Defaults to "/" but a mount name reads
-   * better — clicking it always navigates to the mount root.
+   * better - clicking it always navigates to the mount root.
    */
   rootLabel?: React.ReactNode
   /**
@@ -27,11 +27,12 @@ interface BreadcrumbProps {
    */
   onNavigate: (folderPath: string) => void
   /**
-   * Optional: when provided AND the leaf is a folder (i.e. `isFile` is
-   * false and `path` is non-empty), renders a small pencil button
-   * after the leaf segment. Clicking it triggers a rename of the
-   * current folder. The mount-root crumb never gets the pencil —
-   * renaming a mount is a settings-level concern, not a workspace one.
+   * Optional: when provided AND the path has at least one segment,
+   * renders a small pencil button after the leaf. Clicking it
+   * triggers a rename of whatever the leaf points at - the current
+   * folder in directory mode, the open file in editor mode. The
+   * mount-root crumb never gets the pencil since renaming a mount
+   * is a settings-level concern, not a workspace one.
    */
   onRenameLeaf?: () => void
 }
@@ -69,16 +70,18 @@ export const Breadcrumb: React.FC<BreadcrumbProps> = ({
   // cleanly without a phantom empty string at either end.
   const cleaned = path.replace(/^\/+/, '').replace(/\/+$/, '')
   const segments = cleaned ? cleaned.split('/') : []
-  // The leaf pencil only makes sense when there's a folder leaf to
-  // rename: at the mount root the leaf is implicit and renaming the
-  // mount itself isn't a workspace-level action, and in editor mode
-  // the file is already covered by the toolbar's Rename button.
-  const showRenameLeaf = !!onRenameLeaf && segments.length > 0 && !isFile
+  // The leaf pencil shows whenever there's a workspace-level leaf to
+  // rename - folder OR file. We still skip the mount-root crumb
+  // (segments.length === 0) because renaming a mount itself is a
+  // settings-page concern, not something we want a stray pencil to
+  // expose from the workspace toolbar.
+  const showRenameLeaf = !!onRenameLeaf && segments.length > 0
+  const renameTitle = isFile ? 'Rename current file' : 'Rename current folder'
 
   return (
     <S.BreadcrumbRoot aria-label="Breadcrumb">
       {/* Root crumb is always rendered so the user can pop straight back
-          to the mount root from any depth — and so an empty `path`
+          to the mount root from any depth - and so an empty `path`
           (sitting at the mount root) still shows the mount name as
           context, not an awkward empty bar. */}
       <S.Crumb
@@ -92,7 +95,7 @@ export const Breadcrumb: React.FC<BreadcrumbProps> = ({
         const isLast = i === segments.length - 1
         const cumulative = segments.slice(0, i + 1).join('/')
 
-        // The leaf of a file path is the file itself — clicking it as a
+        // The leaf of a file path is the file itself - clicking it as a
         // folder would 404 the filesystem call. Keep it as a static
         // label, the folder crumb for its parent is still clickable.
         if (isLast && isFile) {
@@ -121,8 +124,8 @@ export const Breadcrumb: React.FC<BreadcrumbProps> = ({
         <S.RenameLeaf
           type="button"
           onClick={onRenameLeaf}
-          title="Rename current folder"
-          aria-label="Rename current folder"
+          title={renameTitle}
+          aria-label={renameTitle}
         >
           <PencilIcon />
         </S.RenameLeaf>

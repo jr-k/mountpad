@@ -12,7 +12,7 @@ interface FileTreeItemProps {
   /**
    * Click / Enter handler: OPEN the entry (load the file content or
    * navigate into the folder). The sidebar tree is single-click on
-   * purpose — it's a navigation control, not a selection grid; the
+   * purpose - it's a navigation control, not a selection grid; the
    * double-click "select then open" idiom lives in DirectoryView.
    */
   onActivate: (entry: FileEntry) => void

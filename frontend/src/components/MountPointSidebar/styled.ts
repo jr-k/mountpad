@@ -141,7 +141,7 @@ const luminance = (hex: string): number => {
 // whole button in collapsed mode and inside expanded items / dropdown
 // options. We keep the rounded-square shape (instead of switching to
 // the shared circular Avatar) because it reads as a "workspace tile"
-// alongside the rail/stripe affordance — the active indicator lives
+// alongside the rail/stripe affordance - the active indicator lives
 // outside the avatar, freeing the avatar itself to always display
 // the mount's identity colour.
 export const Avatar = styled.span<{ $bg: string }>`
@@ -211,7 +211,7 @@ export const DropdownRoot = styled.div`
 
 // Trigger reuses the visual rhythm of the desktop Item (same avatar +
 // meta block) so the active mount reads identically across layouts.
-// The trailing caret is the only added affordance — it signals the
+// The trailing caret is the only added affordance - it signals the
 // "tap to switch mount" behaviour.
 //
 // Visual treatment is flat and edge-to-edge: no radius, no full
@@ -251,7 +251,7 @@ export const DropdownCaret = styled.span<{ $open?: boolean }>`
   transform: rotate(${({ $open }) => ($open ? 180 : 0)}deg);
 `
 
-// Placeholder used when no mount is active yet — short-circuits the
+// Placeholder used when no mount is active yet - short-circuits the
 // avatar+meta layout to avoid rendering empty cells. Italic muted
 // text reads as "nothing selected", matching the convention used by
 // other empty-state placeholders in the app.
@@ -262,8 +262,8 @@ export const DropdownPlaceholder = styled.span`
 `
 
 // OptionList is the flat container for the mount options rendered
-// inside the mount-picker modal body. We keep it minimal — no
-// border, no background, no padding — because the Modal Body already
+// inside the mount-picker modal body. We keep it minimal - no
+// border, no background, no padding - because the Modal Body already
 // owns those: the dialog has its own border + radius + padding, and
 // the body handles scroll when the list exceeds the dialog's
 // max-height (set on Modal.Dialog itself). This component is here
@@ -280,7 +280,7 @@ OptionList.displayName = 'MountPointSidebar.OptionList'
 // Mirrors the desktop Item but doesn't draw its own border (the
 // dialog already frames everything), keeping rows visually quiet
 // so the active highlight stands out. Used identically across
-// desktop expanded view and the mobile modal — same look, same
+// desktop expanded view and the mobile modal - same look, same
 // interaction model.
 export const DropdownOption = styled.button<{ $active?: boolean }>`
   display: flex;

@@ -119,7 +119,7 @@ const ProfilePage: React.FC = () => {
             <S.PreviewMeta>
               <S.PreviewName>{previewName}</S.PreviewName>
               <S.PreviewSub>
-                <span><code>{user?.username ?? authUser?.username ?? '—'}</code></span>
+                <span><code>{user?.username ?? authUser?.username ?? '-'}</code></span>
                 {form.email && <span>{form.email}</span>}
                 <SP.Pill $tone={authUser?.is_admin ? 'warn' : 'neutral'}>
                   {authUser?.is_admin ? 'admin' : 'member'}

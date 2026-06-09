@@ -47,10 +47,10 @@ export const HeaderMeta = styled.span`
 // dropdown, and the list/grid ViewToggle. We push the whole cluster
 // to the right with `margin-left: auto` so it always sits on that
 // edge, regardless of what precedes it. `gap: space[3]` separates
-// the three groups laterally — without it the borders touch and the
+// the three groups laterally - without it the borders touch and the
 // reader can't tell where one control ends and the next begins.
 // (Within each group the buttons still share their own tighter spacing
-// — e.g. Sort + Asc use HeaderButtonGroup's 4px gap.)
+// - e.g. Sort + Asc use HeaderButtonGroup's 4px gap.)
 export const HeaderActions = styled.div`
   margin-left: auto;
   display: inline-flex;
@@ -258,18 +258,18 @@ export const Table = styled.table`
 `
 
 // user-select: none keeps double-clicks from highlighting the row's
-// text — without it the activation gesture would smear a text selection
+// text - without it the activation gesture would smear a text selection
 // across the cells before opening the entry, which feels broken even
 // though the click handler still fires.
 //
 // $dragging: applied to the source rows while a drag is in progress.
 // We dim them in place (instead of removing them from the layout) so
-// the user sees a "hole" where the items used to sit — matches the
+// the user sees a "hole" where the items used to sit - matches the
 // Windows Explorer convention of "the file is being moved out of here".
 //
 // $dropTarget: applied to a folder row when the active drag could
 // land on it. Drawing a strong inset ring is more reliable than a
-// border-color change at small row heights — it doesn't shift the
+// border-color change at small row heights - it doesn't shift the
 // row by 1px or clash with the active-selection background.
 export const Row = styled.tr<{ $active?: boolean; $dragging?: boolean; $dropTarget?: boolean }>`
   cursor: pointer;
@@ -427,7 +427,7 @@ export const EmptyTile = styled.div`
 // DragGhost is the floating preview rendered next to the cursor while
 // the user drags one (or many) entries. It lives permanently in the
 // DOM at off-screen coordinates so we can mutate its content from
-// onDragStart and immediately feed it to dataTransfer.setDragImage —
+// onDragStart and immediately feed it to dataTransfer.setDragImage -
 // the browser snapshots the node at that moment and detaches it from
 // our DOM for the rest of the drag.
 //

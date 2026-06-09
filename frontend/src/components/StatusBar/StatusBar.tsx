@@ -11,7 +11,7 @@ interface StatusBarProps {
   metrics?: React.ReactNode
   /** App version string, rendered on the right next to the GitHub link. */
   version?: string
-  /** Repo URL — defaults to the upstream MountPad repository. */
+  /** Repo URL - defaults to the upstream MountPad repository. */
   repoUrl?: string
 }
 

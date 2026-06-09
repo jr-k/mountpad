@@ -392,6 +392,34 @@ export const LinkCell = styled.button`
 `
 LinkCell.displayName = 'SettingsPage.LinkCell'
 
+// AvatarButton makes the avatar tile in a settings-table row clickable
+// without changing how it looks at rest. The button is sized like the
+// inline Avatar (40x40 with the default 32px circle, but we let
+// callers control it through inline width/height when they want a
+// tighter cell). A faint ring appears on hover/focus so the affordance
+// is discoverable without competing with the LinkCell text trigger
+// next to it. Inherits border-radius from the inner Avatar (circle).
+export const AvatarButton = styled.button`
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+  &:hover { box-shadow: 0 0 0 2px ${({ theme }) => theme.color.accent}; }
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px ${({ theme }) => theme.color.accent};
+  }
+  &:active { transform: scale(0.96); }
+`
+AvatarButton.displayName = 'SettingsPage.AvatarButton'
+
 export const HelpText = styled.p`
   margin: 0 0 ${({ theme }) => theme.space[3]};
   font-size: ${({ theme }) => theme.font.size.sm};

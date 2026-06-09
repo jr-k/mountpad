@@ -137,8 +137,14 @@ func assertNoSymlinks(root, target string) error {
 	return nil
 }
 
-// pathContains reports whether child is equal to parent or lives strictly
-// inside it. Both paths must already be cleaned and absolute.
+// PathContains reports whether child is equal to parent or lives strictly
+// inside it. Both paths must already be cleaned and absolute. Exported
+// so callers outside the package (handlers double-checking a symlink
+// target during a walk, for example) can reuse the same logic.
+func PathContains(parent, child string) bool {
+	return pathContains(parent, child)
+}
+
 func pathContains(parent, child string) bool {
 	parent = filepath.Clean(parent)
 	child = filepath.Clean(child)

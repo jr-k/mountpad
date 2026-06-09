@@ -37,6 +37,16 @@ interface FileToolbarProps {
    */
   canDelete?: boolean
   /**
+   * Download is single OR bulk: a single file streams its bytes
+   * directly, anything else (a folder, or multiple selections)
+   * comes back as a zip. The button is hidden when there's nothing
+   * to download.
+   */
+  canDownload?: boolean
+  /** Number of subjects the next Download press would act on. */
+  downloadCount?: number
+  onDownload?: () => void
+  /**
    * Number of entries the next Delete press would act on. When > 1,
    * the button surfaces the count ("Delete 5 items") so the user knows
    * the action is a bulk operation before they trigger the confirmation
@@ -75,10 +85,55 @@ const PanelIcon: React.FC<{ $active?: boolean }> = ({ $active }) => (
   </svg>
 )
 
+// All toolbar action glyphs share a single 14x14 stroked style so the
+// visual weight stays consistent across Download / Rename / Delete /
+// Permissions. They rely on `currentColor` so the destructive variant
+// (Delete) automatically picks up the right tint.
+const iconProps = {
+  width: 14,
+  height: 14,
+  viewBox: '0 0 16 16',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.6,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+}
+const DownloadIcon = () => (
+  <svg {...iconProps}>
+    <path d="M8 2v8" />
+    <path d="M4.5 7L8 10.5 11.5 7" />
+    <path d="M3 13h10" />
+  </svg>
+)
+const RenameIcon = () => (
+  <svg {...iconProps}>
+    <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z" />
+    <path d="M10 4l2 2" />
+  </svg>
+)
+const DeleteIcon = () => (
+  <svg {...iconProps}>
+    <path d="M3 4.5h10" />
+    <path d="M6 4.5V3a1 1 0 011-1h2a1 1 0 011 1v1.5" />
+    <path d="M4.5 4.5l.7 8a1 1 0 001 .9h3.6a1 1 0 001-.9l.7-8" />
+    <path d="M7 7v4M9 7v4" />
+  </svg>
+)
+const PermissionsIcon = () => (
+  <svg {...iconProps}>
+    <path d="M8 1.75L13.25 4v4c0 3-2.25 5.25-5.25 6.25C5 13.25 2.75 11 2.75 8V4z" />
+    <circle cx="8" cy="7.5" r="1.4" />
+    <path d="M8 8.9V11" />
+  </svg>
+)
+
 export const FileToolbar: React.FC<FileToolbarProps> = ({
   filePath, isFile, mountName, onNavigateFolder,
   status, statusLabel, canSave, onSave, onRename, onDelete, onPermissions,
   canRename = false, canDelete = false, deleteCount = 1, onRenameLeaf,
+  canDownload = false, downloadCount = 1, onDownload,
   showDetails, onToggleDetails,
 }) => (
   <S.FileToolbarRoot>
@@ -98,20 +153,35 @@ export const FileToolbar: React.FC<FileToolbarProps> = ({
       />
     </S.Title>
     {statusLabel && <S.Status $tone={status}>{statusLabel}</S.Status>}
-    <Button size="sm" variant="ghost" onClick={onPermissions} disabled={!filePath}>Permissions</Button>
-    {/* Rename is single-target only; Delete is contextual on the
-        actual count so multi-select lights up "Delete N items" without
-        re-enabling Rename for an action that doesn't make sense in
-        bulk. With nothing selected at all the user renames the current
-        folder via the breadcrumb pencil instead. */}
-    {canRename && (
-      <Button size="sm" variant="secondary" onClick={onRename}>Rename</Button>
-    )}
+    {/* Action cluster order, left to right: Delete first so the
+        single red (danger) button never sits sandwiched between gray
+        buttons (which produced a jarring grey-red-grey rhythm as
+        the cluster lit up). All secondary actions then run in one
+        uninterrupted gray block: Download, Rename, Permissions.
+        Permissions always renders (just disabled when nothing's
+        applicable) so its slot doesn't shift around. */}
     {canDelete && (
       <Button size="sm" variant="danger" onClick={onDelete}>
+        <DeleteIcon />
         {deleteCount > 1 ? `Delete ${deleteCount} items` : 'Delete'}
       </Button>
     )}
+    {canDownload && (
+      <Button size="sm" variant="secondary" onClick={onDownload}>
+        <DownloadIcon />
+        {downloadCount > 1 ? `Download ${downloadCount} items` : 'Download'}
+      </Button>
+    )}
+    {canRename && (
+      <Button size="sm" variant="secondary" onClick={onRename}>
+        <RenameIcon />
+        Rename
+      </Button>
+    )}
+    <Button size="sm" variant="secondary" onClick={onPermissions} disabled={!filePath}>
+      <PermissionsIcon />
+      Permissions
+    </Button>
     {/* Save only appears when there is something to save. Showing it
         disabled the rest of the time turns the toolbar's primary action
         into visual noise and steals attention from the other buttons. */}

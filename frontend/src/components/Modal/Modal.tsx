@@ -14,7 +14,7 @@ interface ModalProps {
   /**
    * Optional submit handler. When provided, the modal wraps its body
    * + footer in a `<form>`, so pressing Enter inside any input triggers
-   * this callback — same effect as clicking the primary action button.
+   * this callback - same effect as clicking the primary action button.
    * Useful for short forms (rename, create file/folder, reset password)
    * where Enter is the user's natural confirmation gesture.
    */

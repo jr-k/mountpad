@@ -1,7 +1,7 @@
 // In-tab drag-and-drop coordination for moving file entries.
 //
 // HTML5 DnD only exposes `dataTransfer.getData(...)` to the `drop`
-// handler — `dragover` / `dragenter` can read the *type list* but not
+// handler - `dragover` / `dragenter` can read the *type list* but not
 // the payload, which makes it impossible to compute "would this be a
 // valid drop?" highlights without an out-of-band channel.
 //

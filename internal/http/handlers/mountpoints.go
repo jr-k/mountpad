@@ -31,10 +31,18 @@ type mountPayload struct {
 	DefaultGroupID *int64 `json:"default_group_id,omitempty"`
 	DefaultMode    uint16 `json:"default_mode"`
 	// AvatarColor is a CSS color string ("#rrggbb") or "" to mean "use
-	// the deterministic palette". We accept it on every write — empty
+	// the deterministic palette". We accept it on every write - empty
 	// is a valid value and the only way for the user to clear a
 	// previously picked colour.
 	AvatarColor string `json:"avatar_color"`
+	// FollowSymlinks is the per-mount override of the global
+	// MOUNTPAD_FOLLOW_SYMLINK env var. We accept it on every write
+	// (true OR false are both meaningful) so admins can flip the
+	// flag from the settings UI without having to redeploy. The
+	// field is a non-pointer bool: a missing key in the JSON body
+	// decodes to false, which would be a silent regression for any
+	// client that doesn't send it. The frontend ALWAYS sends it.
+	FollowSymlinks bool `json:"follow_symlinks"`
 }
 
 func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +56,7 @@ func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		DefaultOwnerID: p.DefaultOwnerID, DefaultGroupID: p.DefaultGroupID,
 		DefaultMode: p.DefaultMode,
 		AvatarColor: p.AvatarColor,
+		FollowSymlinks: p.FollowSymlinks,
 	}
 	if err := h.Svc.Create(r.Context(), m); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest); return
@@ -76,6 +85,7 @@ func (h *MountPointsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// custom colour to fall back on the deterministic palette), so we
 	// always assign instead of guarding with `if != ""`.
 	m.AvatarColor = p.AvatarColor
+	m.FollowSymlinks = p.FollowSymlinks
 	if err := h.Svc.Update(r.Context(), m); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest); return
 	}

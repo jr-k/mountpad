@@ -34,7 +34,7 @@ const readStoredMode = (): ViewMode => {
 // "modified · desc" keeps that for every folder they navigate into.
 //
 // Owner/Group are listed even though they don't render in the default
-// columns — they're still meaningful sort keys.
+// columns - they're still meaningful sort keys.
 //
 // Creation date is intentionally absent: the listing API only exposes
 // the modification time (`ModifiedAt`), so a "created" sort would
@@ -111,7 +111,7 @@ interface DirectoryViewProps {
   /** Triggered when the user double-clicks an entry (file or sub-folder). */
   onOpenEntry: (entry: FileEntry) => void
   /**
-   * Notified when the *primary* selection changes — i.e. when the user
+   * Notified when the *primary* selection changes - i.e. when the user
    * has exactly one entry selected. `null` is emitted both for an empty
    * selection and for a multi-selection, so single-target actions like
    * Rename only enable themselves against a single subject.
@@ -210,7 +210,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 
   // Sort + visible-columns preferences (persisted, see helpers above).
   // Owner/Group are valid sort keys regardless of whether their column
-  // is on — sorting "by owner" still makes sense in grid view, for
+  // is on - sorting "by owner" still makes sense in grid view, for
   // instance, where columns don't render at all.
   const [sortKey, setSortKey] = useState<SortKey>(readStoredSortKey)
   const [sortDir, setSortDir] = useState<SortDir>(readStoredSortDir)
@@ -222,7 +222,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 
   // App-wide "show hidden files" preference, shared with FileExplorer
   // via a tiny module-level pub/sub (see hooks/useShowHidden). Flipping
-  // it here also flips the sidebar in the same tick — no parent
+  // it here also flips the sidebar in the same tick - no parent
   // plumbing needed.
   const { showHidden, toggleShowHidden } = useShowHidden()
 
@@ -260,7 +260,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   // without leaking that complexity into the parent. The parent only
   // hears about it through `onSelectionChange`, which fires with the
   // unique entry when exactly one item is selected, and with `null`
-  // otherwise — keeping toolbar actions tied to a single subject.
+  // otherwise - keeping toolbar actions tied to a single subject.
   //
   // - selectedPaths: committed selection (set of entry paths)
   // - anchorPath:    fixed origin used by Shift-click / Shift-arrow
@@ -310,7 +310,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     return () => { cancelled = true }
   }, [mountId, path, refreshKey])
 
-  // Folders always bubble to the top regardless of sort key — this is
+  // Folders always bubble to the top regardless of sort key - this is
   // the universal file-manager convention, and putting a 200-folder
   // listing under the size-sorted files would be unreadable. Within
   // each group (dirs / files) we apply the selected sort key + dir.
@@ -373,7 +373,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   }, [entries, sortKey, sortDir, userById, groupById, showHidden])
 
   // Fetch the user/group directories the first time we actually need
-  // them — i.e. when the Owner/Group column is on OR sorting by owner
+  // them - i.e. when the Owner/Group column is on OR sorting by owner
   // or group. Without this, the dropdowns/columns would render raw
   // numeric IDs forever. Failures are silent on purpose: the labels
   // simply fall back to the raw ID, same as in FileExplorer.
@@ -514,7 +514,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   // into the current listing. We wait for the entries to land (i.e.
   // `loading` to flip back to false and the target to appear in
   // `sorted`) so we don't apply focus against the stale pre-refresh
-  // listing — that would just be pruned by the effect above. Once
+  // listing - that would just be pruned by the effect above. Once
   // applied, we notify the parent so it can clear the request and we
   // don't re-steal the user's selection on unrelated future refreshes.
   useEffect(() => {
@@ -563,12 +563,25 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     if (!marquee || !scrollBodyRef.current) return
     const sb = scrollBodyRef.current
 
-    const onMove = (ev: MouseEvent) => {
+    // Edge-scroll plumbing: when the pointer enters the dead zone
+    // near the top/bottom (or left/right) of the visible ScrollBody,
+    // we drive an rAF loop that nudges sb.scrollTop/Left by `vY/vX`
+    // each frame until the pointer leaves the zone or the drag ends.
+    // The selection box has to keep growing while we scroll (the
+    // pointer stays at the same clientY but the content underneath
+    // moves), so the rAF tick re-runs the same update() the
+    // mousemove handler does.
+    const lastClient = { x: 0, y: 0 }
+    let vX = 0, vY = 0
+    let rafId = 0
+
+    const EDGE = 56        // px - dead zone before scroll kicks in
+    const MAX_SPEED = 22   // px per rAF frame at the very edge
+
+    const update = () => {
       const rect = sb.getBoundingClientRect()
-      const curX = ev.clientX - rect.left + sb.scrollLeft
-      const curY = ev.clientY - rect.top + sb.scrollTop
-      // Window-level mousemoves keep the pointer ref alive even when
-      // the cursor strays outside the ScrollBody during a drag.
+      const curX = lastClient.x - rect.left + sb.scrollLeft
+      const curY = lastClient.y - rect.top + sb.scrollTop
       pointerRef.current = { x: curX, y: curY, inside: pointerRef.current.inside }
 
       const left   = Math.min(marquee.startX, curX)
@@ -595,6 +608,57 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
       }
       marqueePathsRef.current = hit
       setMarqueePaths(hit)
+    }
+
+    const tick = () => {
+      // Bail out cleanly when the ScrollBody hits a hard limit -
+      // otherwise we'd burn CPU on no-op rAF callbacks once the
+      // user reaches the top or bottom.
+      const maxTop = sb.scrollHeight - sb.clientHeight
+      const maxLeft = sb.scrollWidth - sb.clientWidth
+      if (vY < 0 && sb.scrollTop <= 0) vY = 0
+      if (vY > 0 && sb.scrollTop >= maxTop) vY = 0
+      if (vX < 0 && sb.scrollLeft <= 0) vX = 0
+      if (vX > 0 && sb.scrollLeft >= maxLeft) vX = 0
+
+      if (vY !== 0) sb.scrollTop  = Math.max(0, Math.min(maxTop,  sb.scrollTop  + vY))
+      if (vX !== 0) sb.scrollLeft = Math.max(0, Math.min(maxLeft, sb.scrollLeft + vX))
+
+      if (vY !== 0 || vX !== 0) {
+        update()
+        rafId = requestAnimationFrame(tick)
+      } else {
+        rafId = 0
+      }
+    }
+
+    const computeVelocity = (clientX: number, clientY: number) => {
+      const rect = sb.getBoundingClientRect()
+      // Use the viewport-clipped portion of the ScrollBody so dragging
+      // toward the BOTTOM OF THE VIEWPORT (not the bottom of the
+      // possibly-taller element) is enough to trigger a scroll. This
+      // matches Finder / Explorer / Files etc.
+      const top    = Math.max(rect.top,    0)
+      const bottom = Math.min(rect.bottom, window.innerHeight)
+      const left   = Math.max(rect.left,   0)
+      const right  = Math.min(rect.right,  window.innerWidth)
+
+      vY = 0
+      if (clientY < top + EDGE)    vY = -Math.ceil(((top + EDGE - clientY) / EDGE) * MAX_SPEED)
+      if (clientY > bottom - EDGE) vY =  Math.ceil(((clientY - (bottom - EDGE)) / EDGE) * MAX_SPEED)
+      vX = 0
+      if (clientX < left + EDGE)   vX = -Math.ceil(((left + EDGE - clientX) / EDGE) * MAX_SPEED)
+      if (clientX > right - EDGE)  vX =  Math.ceil(((clientX - (right - EDGE)) / EDGE) * MAX_SPEED)
+    }
+
+    const onMove = (ev: MouseEvent) => {
+      lastClient.x = ev.clientX
+      lastClient.y = ev.clientY
+      computeVelocity(ev.clientX, ev.clientY)
+      update()
+      if ((vY !== 0 || vX !== 0) && rafId === 0) {
+        rafId = requestAnimationFrame(tick)
+      }
     }
 
     const onUp = () => {
@@ -627,6 +691,8 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
         setCursorPath(firstSelected?.path ?? null)
       }
 
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+      vY = 0; vX = 0
       setMarquee(null)
       setMarqueeBox(null)
       setMarqueePaths(new Set())
@@ -638,6 +704,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      if (rafId) cancelAnimationFrame(rafId)
     }
     // `sorted` lives in the dep array so a listing refresh that lands
     // mid-drag re-attaches handlers with the up-to-date entries.
@@ -683,7 +750,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 
   // ── Drag-and-drop (move) ────────────────────────────────────────────
   // Source: the selected entries (or the single hovered entry if the
-  // user starts dragging an unselected item — matches every native
+  // user starts dragging an unselected item - matches every native
   // file manager). Target: any folder row/tile in this view, plus
   // the synthetic ".." row, plus folder rows in the sidebar tree
   // (handled by FileTreeItem, sharing the same dnd module).
@@ -812,7 +879,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 
   // Find the entry whose centre is closest to the current pointer
   // position. Used to seed the keyboard cursor when the user starts
-  // navigating with the arrows before having clicked anything — so the
+  // navigating with the arrows before having clicked anything - so the
   // first arrow press lands "where they are looking", not at the top
   // of the list. Falls back to the first entry when the pointer has
   // never entered the panel.
@@ -846,7 +913,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   // - First arrow without any cursor: seed the cursor on the entry
   //   nearest the mouse pointer, so navigation can start without
   //   the user having to click first.
-  // - Enter: activate the cursor entry through our own model — NOT
+  // - Enter: activate the cursor entry through our own model - NOT
   //   through whichever DOM element happens to be focused. This keeps
   //   the keyboard contract bound to the visible selection instead of
   //   stale browser focus left behind by an earlier click. Space is
@@ -863,7 +930,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
       // we keep our hands off it.
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return
       if (isActivate && ev.shiftKey) return
-      // A modal sitting on top owns the keyboard while it's open —
+      // A modal sitting on top owns the keyboard while it's open -
       // pressing Enter inside a rename input must not also activate
       // whatever the DirectoryView cursor was pointing at underneath.
       if (isAnyModalOpen()) return
@@ -960,7 +1027,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   }, [cursorPath])
 
   // Close header dropdowns on outside click or Escape. Both menus
-  // share the same handler — the wrapper refs let us check whether
+  // share the same handler - the wrapper refs let us check whether
   // the click landed inside the menu's own subtree (which would mean
   // "user is interacting with the menu, keep it open").
   useEffect(() => {
@@ -1012,7 +1079,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
             <S.HeaderButton
               type="button"
               onClick={() => setSortDirAndPersist(sortDir === 'asc' ? 'desc' : 'asc')}
-              title={sortDir === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'}
+              title={sortDir === 'asc' ? 'Ascending - click to reverse' : 'Descending - click to reverse'}
               aria-label={`Sort direction: ${sortDir === 'asc' ? 'ascending' : 'descending'}`}
             >
               {sortDir === 'asc' ? <SortAscIcon /> : <SortDescIcon />}
@@ -1036,7 +1103,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
             )}
           </S.HeaderButtonGroup>
 
-          {/* Columns dropdown — checkboxes, no auto-close on toggle
+          {/* Columns dropdown - checkboxes, no auto-close on toggle
               so the user can flip multiple columns in one go. */}
           <S.HeaderButtonGroup ref={colsMenuRef}>
             <S.HeaderButton
@@ -1074,7 +1141,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
           </S.HeaderButtonGroup>
 
           {/* Show/hide dotfiles. Icon mirrors the current state
-              (eye = visible, eye-off = hidden) — matching the
+              (eye = visible, eye-off = hidden) - matching the
               convention used by Finder / GNOME Files / VS Code.
               `aria-pressed` makes it a toggle button for AT; the
               tooltip + label make the next action explicit. */}
@@ -1354,7 +1421,7 @@ const renderList = ({
 // Tiles intentionally stay OUT of the DOM focus chain. `tabIndex=-1`
 // keeps them off the tab sequence; we only stopPropagation on
 // mousedown (so the marquee handler skips us) but DO NOT
-// preventDefault — that would kill the native dragstart in Firefox
+// preventDefault - that would kill the native dragstart in Firefox
 // for a draggable element. Enter activation still goes through the
 // global keydown handler in DirectoryView, which acts on OUR
 // cursorPath, so a momentarily-focused tile doesn't create a stale
@@ -1452,7 +1519,7 @@ const GridIcon: React.FC = () => (
   </svg>
 )
 
-// Tiny caret pointing down — used by the Sort/Columns dropdown
+// Tiny caret pointing down - used by the Sort/Columns dropdown
 // triggers to advertise their menu affordance.
 const CaretIcon: React.FC = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>

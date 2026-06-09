@@ -300,12 +300,19 @@ const AccessSettingsPage: React.FC = () => {
                   <tr key={u.id}>
                     <td><SP.RowNum>{idx + 1}</SP.RowNum></td>
                     <td style={{ width: 40, paddingRight: 0 }}>
-                      <Avatar
-                        id={u.id}
-                        color={u.avatar_color}
-                        labels={[u.display_name, u.first_name, u.username]}
-                        size={32}
-                      />
+                      <SP.AvatarButton
+                        type="button"
+                        onClick={() => openManage(u)}
+                        title={`Manage groups for ${u.username}`}
+                        aria-label={`Manage groups for ${u.username}`}
+                      >
+                        <Avatar
+                          id={u.id}
+                          color={u.avatar_color}
+                          labels={[u.display_name, u.first_name, u.username]}
+                          size={32}
+                        />
+                      </SP.AvatarButton>
                     </td>
                     <td>
                       <SP.LinkCell
@@ -388,7 +395,14 @@ const AccessSettingsPage: React.FC = () => {
                   <tr key={g.id}>
                     <td><SP.RowNum>{idx + 1}</SP.RowNum></td>
                     <td style={{ width: 40, paddingRight: 0 }}>
-                      <Avatar id={g.id} color={g.avatar_color} labels={[g.name]} size={32} />
+                      <SP.AvatarButton
+                        type="button"
+                        onClick={() => openEditGroup(g)}
+                        title={`Edit ${g.name}`}
+                        aria-label={`Edit ${g.name}`}
+                      >
+                        <Avatar id={g.id} color={g.avatar_color} labels={[g.name]} size={32} />
+                      </SP.AvatarButton>
                     </td>
                     <td>
                       <SP.LinkCell

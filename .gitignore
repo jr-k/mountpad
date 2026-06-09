@@ -11,6 +11,16 @@ frontend/dist
 frontend/node_modules
 node_modules
 
+# Stale tsc artefacts (we set noEmit:true but defense in depth -
+# Vite resolves *.js BEFORE *.tsx, so a leftover compiled file
+# would shadow the source and load stale code at runtime).
+frontend/tsconfig.tsbuildinfo
+frontend/src/**/*.js
+frontend/src/**/*.js.map
+frontend/src/**/*.d.ts.map
+!frontend/src/styled.d.ts
+!frontend/src/vite-env.d.ts
+
 examples/storage/
 !examples/.gitkeep
 

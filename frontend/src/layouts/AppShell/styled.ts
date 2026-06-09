@@ -120,7 +120,7 @@ export const MenuButton = styled.button<{ $open?: boolean }>`
 MenuButton.displayName = 'AppShell.MenuButton'
 
 // Backdrop sits behind the open drawer and dims the main content. Tap to
-// close — managed in AppShell.tsx. Rendered conditionally so it doesn't
+// close - managed in AppShell.tsx. Rendered conditionally so it doesn't
 // intercept clicks when no drawer is open.
 export const Backdrop = styled.div`
   position: fixed;
@@ -201,7 +201,7 @@ export const NavLink = styled.a<{ $active?: boolean }>`
 //
 // On mobile the drawer itself is the scroll container. We deliberately
 // don't try to give each child its own scroll region (the way the
-// desktop layout does) — on a short phone viewport the cumulative
+// desktop layout does) - on a short phone viewport the cumulative
 // height of DrawerHeader + DrawerNav + mount trigger + a deeply
 // expanded file tree easily exceeds 100vh, and a `flex: 1` Explorer
 // would get squashed to 0px while the rest was clipped by overflow.

@@ -19,7 +19,7 @@ interface Options {
  *
  * While a Modal is open, we still swallow the keystroke (otherwise the
  * browser's "save page" dialog would pop up inside a rename input) but
- * skip the `onSave` call — a confirmation dialog shouldn't trigger a
+ * skip the `onSave` call - a confirmation dialog shouldn't trigger a
  * background save on the file underneath.
  */
 export function useSaveShortcut(onSave: () => void, { enabled = true }: Options = {}): void {

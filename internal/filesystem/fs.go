@@ -31,6 +31,7 @@ var (
 type DirEntry struct {
 	Name       string
 	IsDir      bool
+	IsSymlink  bool
 	Size       int64
 	ModifiedAt time.Time
 }
@@ -63,9 +64,14 @@ func ListDir(dirAbs string, manifestFilename string, showManifests bool) ([]DirE
 		if err != nil {
 			continue
 		}
+		// e.Info() returns lstat-equivalent metadata so we can
+		// surface the symlink bit straight to callers (the listing
+		// uses it to drive the read-only banner in the editor and
+		// the icon/badge in the file explorer).
 		out = append(out, DirEntry{
 			Name:       e.Name(),
 			IsDir:      e.IsDir(),
+			IsSymlink:  info.Mode()&os.ModeSymlink != 0,
 			Size:       info.Size(),
 			ModifiedAt: info.ModTime().UTC(),
 		})
@@ -90,7 +96,13 @@ type ReadResult struct {
 }
 
 func ReadFile(absPath string, maxBytes int64) (*ReadResult, error) {
-	info, err := os.Lstat(absPath)
+	// Stat (not Lstat) so this function mirrors the Download handler:
+	// the symlink policy is owned by filesystem.Resolve (which is
+	// called BEFORE ReadFile by every handler in this package) and
+	// duplicating the rejection here used to make Read strictly
+	// stricter than Download. Now both follow the same rule: if
+	// Resolve let the path through, the file is readable.
+	info, err := os.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, ErrNotFound
@@ -99,9 +111,6 @@ func ReadFile(absPath string, maxBytes int64) (*ReadResult, error) {
 	}
 	if info.IsDir() {
 		return nil, fmt.Errorf("is a directory")
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, ErrSymlinkNotAllowed
 	}
 	if info.Size() > maxBytes {
 		return nil, ErrFileTooLarge

@@ -54,8 +54,8 @@ export const Sep = styled.span`
 `
 Sep.displayName = 'StatusBar.Sep'
 
-// Single metric pill. No background — keeping the bar visually flat
-// — just an icon-and-text pairing. The icon slot is optional so a
+// Single metric pill. No background - keeping the bar visually flat
+// - just an icon-and-text pairing. The icon slot is optional so a
 // caller can use the same chip for a pure-text metric (e.g. "42
 // items").
 export const Metric = styled.span`

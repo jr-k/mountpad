@@ -69,7 +69,7 @@ FullRow.displayName = 'ProfilePage.FullRow'
 // as a self-contained card: same border colour, same radius, and the same
 // subtle background as a Section header. Without this, the previous
 // `border-top`-only style made the bar read as a card footer whose card
-// had gone missing — visually floating and cut off on the sides.
+// had gone missing - visually floating and cut off on the sides.
 export const Actions = styled.div`
   display: flex;
   align-items: center;
