@@ -14,6 +14,7 @@ import (
 	"github.com/mountpad/mountpad/internal/models"
 	"github.com/mountpad/mountpad/internal/mountpoints"
 	"github.com/mountpad/mountpad/internal/repositories"
+	"github.com/mountpad/mountpad/internal/version"
 )
 
 // New wires gonertia against either a built dist (prod) or the Vite dev server
@@ -47,10 +48,16 @@ func New(cfg *config.Config, sessions *auth.SessionManager, mounts *repositories
 	i.ShareTemplateData("useViteDev", cfg.UseViteDev)
 	i.ShareTemplateData("appName", cfg.AppName)
 
-	// `app` is a static shared prop (the app name doesn't change at
-	// runtime), so we don't recompute it inside SharedProps on every
-	// request. Configurable via MOUNTPAD_APP_NAME for white-labelling.
-	i.ShareProp("app", map[string]any{"name": cfg.AppName})
+	// `app` is a static shared prop (neither the app name nor the
+	// build version change at runtime), so we don't recompute it
+	// inside SharedProps on every request. The name is configurable
+	// via MOUNTPAD_APP_NAME for white-labelling; the version comes
+	// from the `internal/version` package and is overridden at build
+	// time via -ldflags.
+	i.ShareProp("app", map[string]any{
+		"name":    cfg.AppName,
+		"version": version.Version,
+	})
 	i.ShareProp("flash", map[string]any{})
 	return i, nil
 }

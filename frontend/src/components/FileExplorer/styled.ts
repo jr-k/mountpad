@@ -6,31 +6,46 @@ export const FileExplorerRoot = styled.div`
   flex-direction: column;
   height: 100%;
   background: ${({ theme }) => theme.color.bgPanel};
+
+  /* In the mobile drawer the outer PanelGroup owns the scroll, so
+     this root must collapse to its natural content height instead
+     of stretching to the (now content-sized) Explorer parent. The
+     toolbar + list then stack as a single vertical block that the
+     drawer scrolls. */
+  @media (max-width: ${({ theme }) => theme.bp.lg}) {
+    height: auto;
+  }
 `
 
+// Toolbar holds only the explorer's action controls now (details
+// toggle + create file/folder). The current location is reflected by
+// the synthetic "/" root row at the top of the tree, which doubles as
+// a "back to root" affordance — so a separate breadcrumb here would
+// be pure duplication.
 export const Toolbar = styled.div`
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: ${({ theme }) => theme.space[2]};
   padding: ${({ theme }) => `${theme.space[2]} ${theme.space[3]}`};
   min-height: ${TOOLBAR_MIN_HEIGHT};
   border-bottom: 1px solid ${({ theme }) => theme.color.border};
-`
-
-export const PathBar = styled.div`
-  flex: 1;
-  font-family: ${({ theme }) => theme.font.mono};
-  font-size: ${({ theme }) => theme.font.size.sm};
-  color: ${({ theme }) => theme.color.textMuted};
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-shrink: 0;
 `
 
 export const List = styled.div`
   flex: 1;
   overflow-y: auto;
   padding: ${({ theme }) => theme.space[1]};
+
+  /* Mobile: relinquish the inner scroll and grow to content. The
+     PanelGroup is the single scroll container in the drawer, so a
+     nested overflow here would trap the user in a scroll-inside-a-
+     scroll loop when the tree is deeper than the visible slice. */
+  @media (max-width: ${({ theme }) => theme.bp.lg}) {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
 `
 
 export const Group = styled.div`

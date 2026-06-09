@@ -11,7 +11,7 @@ export const FileToolbarRoot = styled.div`
   display: flex;
   align-items: center;
   gap: ${({ theme }) => theme.space[2]};
-  padding: ${({ theme }) => `${theme.space[2]} ${theme.space[4]}`};
+  padding: ${({ theme }) => `${theme.space[1.5]} ${theme.space[4]}`};
   min-height: ${TOOLBAR_MIN_HEIGHT};
   border-bottom: 1px solid ${({ theme }) => theme.color.border};
   background: ${({ theme }) => theme.color.bgSubtle};

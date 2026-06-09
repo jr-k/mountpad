@@ -104,3 +104,46 @@ export const DeleteOption = styled.label<{ $danger?: boolean }>`
 `
 
 DeleteOption.displayName = 'WorkspacePage.DeleteOption'
+
+// DeleteList renders the bulleted paths inside the bulk-delete dialog.
+// We cap the visible height so a 200-item selection doesn't take the
+// whole viewport, while keeping each item readable in mono.
+export const DeleteList = styled.ul`
+  margin: 0 0 ${({ theme }) => theme.space[3]};
+  padding: ${({ theme }) => `${theme.space[2]} ${theme.space[3]}`};
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ theme }) => theme.color.bgSubtle};
+  font-family: ${({ theme }) => theme.font.mono};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  color: ${({ theme }) => theme.color.text};
+
+  & li {
+    padding: 2px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  & li.dir::before { content: '📁  '; }
+  & li.file::before { content: '📄  '; }
+`
+DeleteList.displayName = 'WorkspacePage.DeleteList'
+
+// DeleteError is the red banner that surfaces when a bulk delete had
+// failures. It sits at the bottom of the dialog body, replacing the
+// generic hint, and stays until the user retries or cancels.
+export const DeleteError = styled.p`
+  margin: 0;
+  padding: ${({ theme }) => `${theme.space[2]} ${theme.space[3]}`};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  color: ${({ theme }) => theme.color.danger};
+  background: ${({ theme }) =>
+    `color-mix(in srgb, ${theme.color.danger} 10%, transparent)`};
+  border: 1px solid ${({ theme }) =>
+    `color-mix(in srgb, ${theme.color.danger} 30%, transparent)`};
+  border-radius: ${({ theme }) => theme.radius.md};
+`
+DeleteError.displayName = 'WorkspacePage.DeleteError'

@@ -9,19 +9,25 @@ export const AppShellRoot = styled.div<{ $withBanner?: boolean; $bare?: boolean 
   display: grid;
   /* The sidebar column is sized to its content so the mount sidebar can
      collapse from ~220px to ~56px (Slack-style) without the grid having
-     to know about it. The explorer and main columns keep their fixed
-     budget. */
-  grid-template-columns: ${({ $bare }) => ($bare ? '1fr' : 'auto 320px 1fr')};
-  grid-template-rows: ${({ $withBanner }) => ($withBanner ? '32px 48px 1fr' : '48px 1fr')};
+     to know about it. The explorer column reads its width from the
+     --explorer-width CSS variable, which AppShell sets from its
+     resize-handle state (with a sane 320px fallback). The main column
+     fills whatever is left. */
+  grid-template-columns: ${({ $bare }) => ($bare ? '1fr' : 'auto var(--explorer-width, 320px) 1fr')};
+  /* Status bar gets its own auto-sized track at the bottom: the
+     StatusBar component has an intrinsic 22px height, so we let the
+     grid pick it up instead of hard-coding a value here (keeps the
+     row in sync if we ever bump the bar's height). */
+  grid-template-rows: ${({ $withBanner }) => ($withBanner ? '32px 48px 1fr auto' : '48px 1fr auto')};
   grid-template-areas: ${({ $withBanner, $bare }) => {
     if ($bare) {
       return $withBanner
-        ? `'banner' 'header' 'main'`
-        : `'header' 'main'`
+        ? `'banner' 'header' 'main' 'status'`
+        : `'header' 'main' 'status'`
     }
     return $withBanner
-      ? `'banner banner banner' 'header header header' 'sidebar explorer main'`
-      : `'header header header' 'sidebar explorer main'`
+      ? `'banner banner banner' 'header header header' 'sidebar explorer main' 'status status status'`
+      : `'header header header' 'sidebar explorer main' 'status status status'`
   }};
   height: 100vh;
   background: ${({ theme }) => theme.color.bg};
@@ -29,12 +35,12 @@ export const AppShellRoot = styled.div<{ $withBanner?: boolean; $bare?: boolean 
   /* Below the lg breakpoint the layout collapses to a single column.
      The sidebar and explorer become off-canvas drawers (see Sidebar /
      Explorer rules), so the grid only tracks the header (+ optional
-     banner) and the main content. Content stays full width: that is the
-     content-first goal. */
+     banner), the main content and the status strip. Content stays full
+     width: that is the content-first goal. */
   @media (max-width: ${({ theme }) => theme.bp.lg}) {
     grid-template-columns: 1fr;
     grid-template-areas: ${({ $withBanner }) =>
-      $withBanner ? `'banner' 'header' 'main'` : `'header' 'main'`};
+      $withBanner ? `'banner' 'header' 'main' 'status'` : `'header' 'main' 'status'`};
   }
 `
 
@@ -192,6 +198,15 @@ export const NavLink = styled.a<{ $active?: boolean }>`
 // child uses its own grid-area from the outer Shell grid. Below the lg
 // breakpoint it becomes a fixed-position drawer that slides in from the
 // left, and the children stack vertically inside it.
+//
+// On mobile the drawer itself is the scroll container. We deliberately
+// don't try to give each child its own scroll region (the way the
+// desktop layout does) — on a short phone viewport the cumulative
+// height of DrawerHeader + DrawerNav + mount trigger + a deeply
+// expanded file tree easily exceeds 100vh, and a `flex: 1` Explorer
+// would get squashed to 0px while the rest was clipped by overflow.
+// One outer scroll keeps everything reachable and matches the
+// expectation users have for "long menu in a drawer".
 export const PanelGroup = styled.div<{ $open?: boolean }>`
   display: contents;
 
@@ -209,7 +224,12 @@ export const PanelGroup = styled.div<{ $open?: boolean }>`
     box-shadow: ${({ theme }) => theme.shadow.lg};
     transform: ${({ $open }) => ($open ? 'translateX(0)' : 'translateX(-100%)')};
     transition: transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* Touch momentum on iOS; contain stops a bounce here from
+       jiggling the body underneath. */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 `
 PanelGroup.displayName = 'AppShell.PanelGroup'
@@ -307,14 +327,61 @@ export const Explorer = styled.section`
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* position: relative anchors the absolutely-positioned ExplorerResizer
+     to this pane's right edge. */
+  position: relative;
 
   @media (max-width: ${({ theme }) => theme.bp.lg}) {
     grid-area: auto;
     border-right: 0;
-    flex: 1;
+    /* In the mobile drawer Explorer is just another stacked block
+       sized to its natural content height; the outer PanelGroup
+       owns the scroll. flex: 0 0 auto disables shrinking so the
+       file tree extends as deep as it needs to, and overflow:
+       visible lets the inner List spill into the PanelGroup
+       scroll context. */
+    flex: 0 0 auto;
+    overflow: visible;
     min-height: 0;
   }
 `
+
+// ExplorerResizer is the 6px-wide drag strip glued to the right edge
+// of the Explorer pane. The visible accent line sits in the middle of
+// that strip (via box-shadow), giving a clean ~1px guide while keeping
+// a comfortable hit area for the pointer.
+//
+// Pure-desktop affordance: the entire handle is hidden below `lg`
+// because the explorer becomes an off-canvas drawer there and resize
+// would be meaningless.
+//
+// `$resizing` paints the active accent state continuously during the
+// drag so the user keeps a clear visual lock on the handle even when
+// the cursor wanders outside the strip itself (pointer capture means
+// move events still reach it, but the hover styles wouldn't apply).
+export const ExplorerResizer = styled.div<{ $resizing?: boolean }>`
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 4;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: ${({ $resizing, theme }) =>
+    $resizing ? `color-mix(in srgb, ${theme.color.accent} 25%, transparent)` : 'transparent'};
+  transition: background 120ms ease;
+
+  &:hover {
+    background: ${({ theme }) => `color-mix(in srgb, ${theme.color.accent} 18%, transparent)`};
+  }
+
+  @media (max-width: ${({ theme }) => theme.bp.lg}) {
+    display: none;
+  }
+`
+ExplorerResizer.displayName = 'AppShell.ExplorerResizer'
 
 export const Main = styled.section`
   grid-area: main;
@@ -323,6 +390,15 @@ export const Main = styled.section`
   overflow: hidden;
   min-width: 0;
 `
+
+// Grid-area slot for the StatusBar. The bar itself owns its own
+// border/background; this wrapper just parks it in the right row
+// and lets it span every column.
+export const Status = styled.div`
+  grid-area: status;
+  min-width: 0;
+`
+Status.displayName = 'AppShell.Status'
 
 export const UserMenu = styled.div`
   display: flex;

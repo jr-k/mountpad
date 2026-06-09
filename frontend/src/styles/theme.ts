@@ -9,6 +9,7 @@ const sharedTokens = {
   space: {
     0:  '0',
     1:  '4px',
+    1.5:  '7px',
     2:  '8px',
     3:  '12px',
     4:  '16px',

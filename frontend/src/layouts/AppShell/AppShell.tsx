@@ -1,12 +1,24 @@
 import React, { useEffect, useState } from 'react'
 import { Link, usePage } from '@inertiajs/react'
+import { useTheme } from 'styled-components'
 import { Logo } from '@/components/Logo'
 import { Avatar } from '@/components/Avatar'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { StatusBar } from '@/components/StatusBar'
 import { api } from '@/lib/api'
+import { useHorizontalResize } from '@/hooks/useHorizontalResize'
 import type { SharedProps } from '@/types/inertia'
 
 import * as S from './styled'
+
+// Min/max/default for the explorer pane width. The min keeps the file
+// tree usable at any reasonable nesting depth; the max prevents the
+// user from turning the explorer into "all pane, no content". Default
+// matches the previous hardcoded 320px.
+const EXPLORER_MIN = 220
+const EXPLORER_MAX = 640
+const EXPLORER_DEFAULT = 320
+const EXPLORER_STORAGE_KEY = 'mountpad:appshell:explorer-width'
 
 // MenuIcon / CloseIcon: lightweight inline SVGs so the hamburger button
 // has no dependency on any icon font and inherits theme color.
@@ -36,15 +48,28 @@ interface AppShellProps {
   sidebar?: React.ReactNode
   explorer?: React.ReactNode
   main: React.ReactNode
+  /**
+   * Page-specific metrics rendered on the left of the bottom
+   * StatusBar (e.g. "42 items · 3 selected" for the workspace).
+   * Optional; the bar always shows the version + GitHub link cluster
+   * on the right regardless.
+   */
+  statusMetrics?: React.ReactNode
 }
 
-export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main }) => {
+export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main, statusMetrics }) => {
   const { props, url } = usePage<SharedProps & Record<string, unknown>>()
+  const theme = useTheme() as { bp: { lg: string } }
   const auth = props.auth
   const user = auth.user
   // App name is set server-side via MOUNTPAD_APP_NAME. The fallback keeps
   // existing dev tooling working if the prop is somehow absent.
   const appName = props.app?.name ?? 'MountPad'
+  // Version comes from the Go `internal/version` package (ldflag
+  // overridable). We don't fall back to anything when absent: a
+  // missing version is more honest than a fake one, and StatusBar
+  // hides the slot entirely in that case.
+  const appVersion = props.app?.version
   const banner = auth.safe_mode
     ? { tone: 'danger' as const, text: 'SAFE MODE: authentication is bypassed' }
     : !auth.enabled
@@ -61,6 +86,18 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main }) =
   const [drawerOpen, setDrawerOpen] = useState(false)
   const closeDrawer = () => setDrawerOpen(false)
 
+  // Resizable explorer pane (desktop only). The width is fed into the
+  // outer grid through a CSS custom property so the mobile media
+  // queries — which collapse the explorer into a drawer — can simply
+  // override the rule without needing to know anything about state.
+  const explorerResize = useHorizontalResize({
+    initial: EXPLORER_DEFAULT,
+    min: EXPLORER_MIN,
+    max: EXPLORER_MAX,
+    side: 'right',
+    storageKey: EXPLORER_STORAGE_KEY,
+  })
+
   // Close the drawer whenever the user navigates: Inertia routes update
   // `url` synchronously so we just react to it. Without this, tapping a
   // sidebar nav link would leave the drawer open over the new page.
@@ -73,6 +110,33 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main }) =
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [drawerOpen])
+
+  // When the viewport crosses up into desktop, force the drawer state
+  // back to closed. The drawer + backdrop are visually no-ops on
+  // desktop (PanelGroup becomes `display: contents`), BUT the
+  // Backdrop is `position: fixed; inset: 0` and would otherwise
+  // remain mounted across the breakpoint — dimming the page and
+  // intercepting every click. Resizing across the breakpoint is rare
+  // for end users but devtools / split-screen / orientation changes
+  // do hit it, and the failure mode (unresponsive UI) is bad enough
+  // to warrant the synchronisation here.
+  //
+  // We use the negation of the CSS media query so the JS branch is
+  // the *exact* inverse of the mobile rule (`@media (max-width: lg)`).
+  // A plain `(min-width: lg)` would also match at exactly `lg` px,
+  // creating a 1px window where the CSS still renders the drawer but
+  // we've already forced it closed.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mql = window.matchMedia(`not all and (max-width: ${theme.bp.lg})`)
+    const sync = (isDesktop: boolean): void => {
+      if (isDesktop) setDrawerOpen(false)
+    }
+    sync(mql.matches)
+    const onChange = (e: MediaQueryListEvent) => sync(e.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [theme.bp.lg])
 
   // The hamburger only makes sense if there's something behind it. For an
   // admin every page has at least nav links to expose; for a member the
@@ -89,7 +153,11 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main }) =
     : []
 
   return (
-    <S.AppShellRoot $withBanner={!!banner} $bare={bare}>
+    <S.AppShellRoot
+      $withBanner={!!banner}
+      $bare={bare}
+      style={{ ['--explorer-width' as string]: `${explorerResize.width}px` }}
+    >
       {banner && <S.Banner $tone={banner.tone}>{banner.text}</S.Banner>}
       <S.Header>
         {hasDrawerContent && (
@@ -192,10 +260,29 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main }) =
             </S.DrawerNav>
           )}
           {!bare && <S.Sidebar>{sidebar}</S.Sidebar>}
-          {!bare && <S.Explorer>{explorer}</S.Explorer>}
+          {!bare && (
+            <S.Explorer>
+              {explorer}
+              {/* Resize handle anchored to the explorer's right edge.
+                  Hidden by the styled component below `lg` (where the
+                  pane is an off-canvas drawer); a double-click on the
+                  handle resets the width to the default. */}
+              <S.ExplorerResizer
+                $resizing={explorerResize.resizing}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize file explorer"
+                title="Drag to resize · double-click to reset"
+                {...explorerResize.handleProps}
+              />
+            </S.Explorer>
+          )}
         </S.PanelGroup>
       )}
       <S.Main>{main}</S.Main>
+      <S.Status>
+        <StatusBar metrics={statusMetrics} version={appVersion} />
+      </S.Status>
     </S.AppShellRoot>
   )
 }

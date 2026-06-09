@@ -28,6 +28,17 @@ interface FileTreeItemProps {
   userById?: Record<number, string>
   /** Map of group ID → display label, used when `showDetails` is on. */
   groupById?: Record<number, string>
+  /**
+   * Drag-and-drop drop handlers. Only meaningful for folder rows
+   * (including the synthetic root); files are never valid drop targets
+   * so the parent simply omits these props for them. The row applies
+   * the highlight via `dropTarget` and forwards the native events.
+   */
+  dropTarget?: boolean
+  onDragOver?: (ev: React.DragEvent) => void
+  onDragEnter?: (ev: React.DragEvent) => void
+  onDragLeave?: (ev: React.DragEvent) => void
+  onDrop?: (ev: React.DragEvent) => void
 }
 
 // iconFor returns an emoji-based glyph that scales nicely (~16-18px) and is
@@ -132,6 +143,7 @@ const ChevronIcon: React.FC = () => (
 export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   entry, depth, open, active, onActivate, onToggle,
   showDetails = false, userById, groupById,
+  dropTarget, onDragOver, onDragEnter, onDragLeave, onDrop,
 }) => {
   // Two interactions on a row:
   //   - row click / Enter / Space → ACTIVATE (open file / enter folder)
@@ -154,12 +166,17 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
     <S.FileTreeItemRow
       $depth={depth}
       $active={active}
+      $dropTarget={dropTarget}
       role="treeitem"
       aria-expanded={entry.is_dir ? !!open : undefined}
       aria-selected={active}
       tabIndex={0}
       onClick={handleRowClick}
       onKeyDown={handleRowKeyDown}
+      onDragOver={onDragOver}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       title={entry.path}
     >
       {entry.is_dir ? (

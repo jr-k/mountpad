@@ -20,6 +20,12 @@ export interface MountPoint {
   default_owner_id?: number | null
   default_group_id?: number | null
   default_mode: number
+  /**
+   * Optional CSS color override for the mount avatar. Empty / missing
+   * means "use the deterministic palette entry derived from the id"
+   * (handled by `resolveAvatarColor` on the client).
+   */
+  avatar_color?: string
 }
 
 export interface ListResponse {

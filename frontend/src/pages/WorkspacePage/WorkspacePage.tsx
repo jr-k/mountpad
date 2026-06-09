@@ -14,6 +14,7 @@ import { Button } from '@/components/Button'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/LoadingState'
 import { WelcomeScreen } from '@/components/WelcomeScreen'
+import { StatusBarParts as SB } from '@/components/StatusBar'
 import { fsApi, HttpError } from '@/lib/api'
 import { useDirty } from '@/hooks/useDirty'
 import { useSaveShortcut } from '@/hooks/useSaveShortcut'
@@ -95,9 +96,29 @@ const WorkspacePage: React.FC = () => {
 
   // DirectoryView selection, lifted up here so the toolbar's Rename and
   // Delete buttons can act on whatever the user just highlighted in the
-  // listing. `null` means "no selection" — actions then fall back to
-  // the current folder (see `actionTarget` below).
+  // listing.
+  // - selectedEntry: the *primary* (only) selection, used by single-
+  //   subject actions (Rename, Permissions). `null` for empty or
+  //   multi-selection.
+  // - selectedEntries: the full selection in stable order, used by
+  //   bulk Delete. Length 0 = nothing selected; length 1 = same item
+  //   as selectedEntry; length N = a multi-select.
   const [selectedEntry, setSelectedEntry] = useState<FileEntry | null>(null)
+  const [selectedEntries, setSelectedEntries] = useState<FileEntry[]>([])
+  // Directory-listing counts surfaced by DirectoryView and fed back
+  // into the bottom StatusBar (e.g. "42 of 48 items"). `visible` is
+  // post-filter (show-hidden toggle etc.); `total` is the raw entry
+  // count. null = not currently in directory mode, so the status bar
+  // omits the item metric entirely.
+  const [dirCounts, setDirCounts] = useState<{ visible: number; total: number } | null>(null)
+  // When the user switches from a folder listing to the file editor
+  // we unmount DirectoryView, but its last reported counts would
+  // otherwise stay pinned in the status bar. Drop the metric so it
+  // matches what's actually on screen.
+  const inEditorView = !!activeFile && !activeFile.is_dir
+  useEffect(() => {
+    if (inEditorView && dirCounts !== null) setDirCounts(null)
+  }, [inEditorView, dirCounts])
 
   // Details panel visibility, persisted across sessions so the user's
   // preference sticks. We default to "shown" because a first-time visitor
@@ -208,21 +229,29 @@ const WorkspacePage: React.FC = () => {
     await fsApi(activeMount.id).createDir(target)
     setShowCreateDir(false); setNewName(''); setExplorerKey((k) => k + 1)
   }
-  // actionTarget resolves which entry Rename/Delete should operate on.
-  // Only two cases qualify:
-  //   1. A DirectoryView selection (single-clicked entry).
+  // actionTarget resolves which entry Rename should operate on. Only
+  // two cases qualify:
+  //   1. A DirectoryView selection of exactly one entry.
   //   2. A file currently being edited (activeFile is a file).
   // Browsing into a folder via the sidebar/breadcrumb does NOT make
   // that folder a target — renaming the folder you are *inside*
   // belongs to the breadcrumb leaf pencil instead, where the action
-  // is visually unambiguous. When no target qualifies, the toolbar
-  // hides the Rename and Delete buttons entirely.
+  // is visually unambiguous.
   const actionTarget = useMemo<FileEntry | null>(() => {
     if (selectedEntry) return selectedEntry
     if (activeFile && !activeFile.is_dir) return activeFile
     return null
   }, [selectedEntry, activeFile])
-  const canModify = !!actionTarget
+  // Rename only ever makes sense with a single subject. Delete works
+  // for both single and bulk, so it follows the wider selectedEntries
+  // array (with the open file as a fallback when nothing is selected).
+  const canRename = !!actionTarget
+  const deleteSubjects = useMemo<FileEntry[]>(() => {
+    if (selectedEntries.length > 0) return selectedEntries
+    if (actionTarget) return [actionTarget]
+    return []
+  }, [selectedEntries, actionTarget])
+  const canDelete = deleteSubjects.length > 0
 
   // Drop any DirectoryView selection whenever the listing context shifts
   // (different mount, or a different folder shown in the main pane). A
@@ -230,15 +259,36 @@ const WorkspacePage: React.FC = () => {
   // we navigate away, leaving it set would let stale targets sneak into
   // Rename/Delete on the new folder's listing.
   const dirPath = activeFile?.path ?? activeDir
-  useEffect(() => { setSelectedEntry(null) }, [activeMount?.id, dirPath])
+  useEffect(() => {
+    setSelectedEntry(null)
+    setSelectedEntries([])
+  }, [activeMount?.id, dirPath])
 
-  // The active rename/delete *subject* is captured at the moment the
+  // The active rename/delete *subjects* are captured at the moment the
   // dialog opens, not derived live from selection. This lets the
   // breadcrumb pencil open the rename modal against the current folder
   // even when nothing is selected, and protects the in-flight operation
-  // from a stray selection change made while the modal is open.
+  // from a stray selection change made while the modal is open. Delete
+  // is an array to support bulk operations from a multi-select.
   const [renameSubject, setRenameSubject] = useState<FileEntry | null>(null)
-  const [deleteSubject, setDeleteSubject] = useState<FileEntry | null>(null)
+  const [deleteSubjectsState, setDeleteSubjectsState] = useState<FileEntry[]>([])
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  // pendingFocus tells DirectoryView "select + cursor this path as
+  // soon as it shows up in the next listing". Set after a rename so
+  // the freshly-named row keeps the highlight the user just had,
+  // instead of falling out of the selection when the refresh prunes
+  // the now-stale old path. Cleared by DirectoryView via
+  // onPendingFocusConsumed once the focus has been applied.
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null)
+
+  // pendingRename tells FileExplorer "rebase any expanded paths
+  // matching `from` onto `to` on the next refresh". Without this,
+  // renaming a folder would snap its (and its descendants') open
+  // branches shut because the stored expanded set still references
+  // the pre-rename paths. Cleared by FileExplorer via
+  // onPendingRenameConsumed once applied.
+  const [pendingRename, setPendingRename] = useState<{ from: string; to: string } | null>(null)
 
   const openRenameDialog = (subject: FileEntry | null = actionTarget) => {
     if (!subject) return
@@ -249,16 +299,44 @@ const WorkspacePage: React.FC = () => {
   const submitRename = async () => {
     if (!activeMount || !renameSubject || !renameValue.trim()) return
     const from = renameSubject.path
+    const newName = renameValue.trim()
     const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
-    const to = parent ? `${parent}/${renameValue.trim()}` : renameValue.trim()
+    const to = parent ? `${parent}/${newName}` : newName
     await fsApi(activeMount.id).rename(from, to)
     setShowRename(false); setRenameValue(''); setRenameSubject(null)
-    setSelectedEntry(null)
-    // When we renamed the folder we are currently sitting in, follow it
-    // to its new path so the workspace doesn't get stranded on a
-    // non-existent directory. Same idea for the active file.
-    if (activeFile && activeFile.path === from) setActiveFile(undefined)
-    if (activeDir === from) setActiveDir(to)
+    // Carry the highlight onto the renamed entry instead of clearing
+    // the selection blindly. The three checks below aren't mutually
+    // exclusive — when the user clicked into a folder, activeFile
+    // AND activeDir both point at the same path, so renaming it
+    // needs to update both for the URL, breadcrumb and DirectoryView
+    // listing to all converge on the new name.
+    //   - activeFile match: swap the editor / opened entry to the
+    //     renamed clone (keeps the editor open instead of bouncing
+    //     the user back to the parent folder).
+    //   - activeDir match: follow the working directory so the
+    //     workspace doesn't strand itself on a now-stale path.
+    //   - neither: the renamed entry is just highlighted in
+    //     DirectoryView. Hand the new path to DirectoryView as a
+    //     pendingFocus — it'll re-select + cursor that row once
+    //     the refresh lands, and our onSelectionChange wiring will
+    //     push selectedEntry back to a fresh FileEntry automatically.
+    const hitsActiveFile = !!activeFile && activeFile.path === from
+    const hitsActiveDir  = activeDir === from
+    if (hitsActiveFile && activeFile) {
+      setActiveFile({ ...activeFile, path: to, name: newName })
+    }
+    if (hitsActiveDir) {
+      setActiveDir(to)
+    }
+    if (!hitsActiveFile && !hitsActiveDir) {
+      setPendingFocus(to)
+    }
+    // Always hand the rename hint to FileExplorer so its persisted
+    // expanded-folders set follows the path rewrite — even for file
+    // renames, where the entry itself isn't in `expanded`, the call
+    // is a cheap no-op (rewriteExpanded short-circuits when no path
+    // matches the prefix).
+    setPendingRename({ from, to })
     setExplorerKey((k) => k + 1)
   }
 
@@ -280,27 +358,65 @@ const WorkspacePage: React.FC = () => {
     })
   }
 
-  const openDeleteDialog = (subject: FileEntry | null = actionTarget) => {
-    if (!subject) return
-    setDeleteSubject(subject)
+  // openDeleteDialog accepts either an explicit subject (legacy single-
+  // entry call site) or falls back to the live `deleteSubjects` memo —
+  // which itself already prefers a multi-selection over the open-file
+  // fallback, so there's no further branching needed here.
+  const openDeleteDialog = (subject?: FileEntry | null) => {
+    const subjects = subject ? [subject] : deleteSubjects
+    if (subjects.length === 0) return
+    setDeleteSubjectsState(subjects)
     setDeleteRecursive(false)
+    setDeleteError(null)
     setConfirmDelete(true)
   }
+  // submitDelete walks every subject in parallel. The recursive
+  // checkbox applies only to folders; flat files always use the basic
+  // remove endpoint. We collect failures into a single human-readable
+  // message instead of aborting on the first one, so a partial bulk
+  // delete still surfaces what went wrong.
   const submitDelete = async () => {
-    if (!activeMount || !deleteSubject) return
-    const target = deleteSubject
-    const recursive = target.is_dir && deleteRecursive
-    if (recursive) await fsApi(activeMount.id).deepRemove(target.path)
-    else await fsApi(activeMount.id).remove(target.path)
-    setConfirmDelete(false); setDeleteRecursive(false); setDeleteSubject(null)
+    if (!activeMount || deleteSubjectsState.length === 0) return
+    const targets = deleteSubjectsState
+    const api = fsApi(activeMount.id)
+    const results = await Promise.allSettled(targets.map((t) => {
+      const recursive = t.is_dir && deleteRecursive
+      return recursive ? api.deepRemove(t.path) : api.remove(t.path)
+    }))
+    const failed: { path: string; reason: string }[] = []
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        const e = r.reason
+        const reason = e instanceof HttpError ? `${e.status}` : String(e)
+        failed.push({ path: targets[i].path, reason })
+      }
+    })
+    if (failed.length > 0) {
+      setDeleteError(
+        failed.length === targets.length
+          ? `Delete failed for every item (${failed[0].reason}).`
+          : `Deleted ${targets.length - failed.length} of ${targets.length}; ${failed.length} failed.`,
+      )
+      // Refresh anyway so the successful deletes are reflected.
+      setExplorerKey((k) => k + 1)
+      return
+    }
+    setConfirmDelete(false)
+    setDeleteRecursive(false)
+    setDeleteSubjectsState([])
     setSelectedEntry(null)
-    if (activeFile && activeFile.path === target.path) setActiveFile(undefined)
+    setSelectedEntries([])
+    // If the open file was among the deleted, close the editor on it.
+    if (activeFile && targets.some((t) => t.path === activeFile.path)) {
+      setActiveFile(undefined)
+    }
     setExplorerKey((k) => k + 1)
   }
   const closeDeleteDialog = () => {
     setConfirmDelete(false)
     setDeleteRecursive(false)
-    setDeleteSubject(null)
+    setDeleteSubjectsState([])
+    setDeleteError(null)
   }
 
   // ── URL sync ─────────────────────────────────────────────────────────
@@ -463,9 +579,47 @@ const WorkspacePage: React.FC = () => {
   // mounts, either at least one user exists or SAFE_MODE is on. We don't
   // try to render a "no users" welcome; the operator is on /setup instead.
 
+  // Compose the page-specific left half of the bottom status bar.
+  // Two metric chips at most: an item counter (only meaningful while
+  // a folder is open) and a selection counter (only while there's
+  // something selected). We pluralise inline rather than pulling in
+  // an i18n util so the bar stays self-contained.
+  const statusMetrics = useMemo<React.ReactNode>(() => {
+    const chips: React.ReactNode[] = []
+    if (dirCounts) {
+      const { visible, total } = dirCounts
+      const itemsLabel = visible <= 1 ? 'item' : 'items'
+      chips.push(
+        <SB.Metric key="items" title={total === visible ? undefined : `${total - visible} hidden`}>
+          {total === visible
+            ? <><b>{visible}</b> {itemsLabel}</>
+            : <><b>{visible}</b> of <b>{total}</b> {itemsLabel}</>}
+        </SB.Metric>,
+      )
+    }
+    if (selectedEntries.length > 0) {
+      chips.push(
+        <SB.Metric key="selected">
+          <b>{selectedEntries.length}</b> selected
+        </SB.Metric>,
+      )
+    }
+    if (chips.length === 0) return null
+    // Interleave bullet separators between chips so the bar reads
+    // "42 items · 3 selected" without each chip having to know
+    // whether it's the last one.
+    const out: React.ReactNode[] = []
+    chips.forEach((c, i) => {
+      if (i > 0) out.push(<SB.Sep key={`sep-${i}`} />)
+      out.push(c)
+    })
+    return out
+  }, [dirCounts, selectedEntries.length])
+
   if (!mountPoints.length) {
     return (
       <AppShell
+        statusMetrics={statusMetrics}
         main={
           <WelcomeScreen
             title="No mounts yet"
@@ -505,6 +659,7 @@ const WorkspacePage: React.FC = () => {
   return (
     <>
       <AppShell
+        statusMetrics={statusMetrics}
         sidebar={
           <MountPointSidebar
             mountPoints={mountPoints}
@@ -523,6 +678,16 @@ const WorkspacePage: React.FC = () => {
               onCreateFile={() => setShowCreateFile(true)}
               onCreateDir={() => setShowCreateDir(true)}
               onRootForbidden={markForbidden}
+              /* Drag-and-drop moves into a sidebar folder reuse the
+                 same refresh path as every other mutation, so the
+                 source listing AND the destination tree both re-fetch. */
+              onAfterMutation={() => setExplorerKey((k) => k + 1)}
+              /* Carry the rename across the refresh so the sidebar's
+                 persisted expanded-folders set follows the new path
+                 instead of stranding the user with a snapped-shut
+                 subtree. */
+              pendingRename={pendingRename}
+              onPendingRenameConsumed={() => setPendingRename(null)}
             />
           ) : null
         }
@@ -544,7 +709,9 @@ const WorkspacePage: React.FC = () => {
               onRename={() => openRenameDialog()}
               onDelete={() => openDeleteDialog()}
               onPermissions={() => activeFile && setShowPerms(true)}
-              canModify={canModify}
+              canRename={canRename}
+              canDelete={canDelete}
+              deleteCount={deleteSubjects.length}
               /* The pencil on the breadcrumb leaf is the one and only
                  way to rename the folder the workspace is currently
                  displaying. We pass it only in folder-listing mode so
@@ -572,18 +739,33 @@ const WorkspacePage: React.FC = () => {
                         path={activeFile?.path || activeDir || ''}
                         refreshKey={explorerKey}
                         onOpenEntry={openFile}
-                        /* DirectoryView owns the (multi-)selection model
-                           internally; we only listen for the primary
-                           single-selection here so the toolbar's
-                           Rename/Delete buttons know what to act on.
-                           Multi-selection is emitted back as `null`,
-                           hiding those buttons until a single subject
-                           is again unambiguous. */
+                        /* DirectoryView owns the multi-selection model
+                           internally and bubbles two signals up:
+                           - onSelectionChange: the primary entry when
+                             exactly one item is selected (drives Rename
+                             and Permissions).
+                           - onSelectedEntriesChange: the full array,
+                             feeding the bulk-Delete affordance and
+                             label ("Delete N items"). */
                         onSelectionChange={setSelectedEntry}
+                        onSelectedEntriesChange={setSelectedEntries}
                         /* onNavigatePath powers the synthetic ".."
                            parent entry rendered at the top of the
                            folder listing. */
                         onNavigatePath={navigateToFolder}
+                        /* Drag-and-drop moves bump the shared key so
+                           both panes re-fetch from the source of truth. */
+                        onAfterMutation={() => setExplorerKey((k) => k + 1)}
+                        /* pendingFocus is set by the rename flow so
+                           the renamed row regains the highlight
+                           after the listing refresh. DirectoryView
+                           clears it once applied. */
+                        pendingFocus={pendingFocus}
+                        onPendingFocusConsumed={() => setPendingFocus(null)}
+                        /* Counts feed the discrete bottom status
+                           bar: visible (post-hidden-filter) vs.
+                           total raw count from the backend. */
+                        onCountsChange={setDirCounts}
                       />
                     )
                   : activeFile && !activeFile.is_dir
@@ -636,43 +818,80 @@ const WorkspacePage: React.FC = () => {
         <Input label="New name" autoFocus value={renameValue} onChange={(e) => setRenameValue(e.target.value)} />
       </Modal>
 
-      <Modal
-        open={confirmDelete}
-        title={deleteSubject?.is_dir ? 'Delete folder' : 'Delete file'}
-        onClose={closeDeleteDialog}
-        footer={<>
-          <Button variant="ghost" onClick={closeDeleteDialog}>Cancel</Button>
-          <Button variant="danger" onClick={submitDelete}>
-            {deleteSubject?.is_dir && deleteRecursive ? 'Delete recursively' : 'Delete'}
-          </Button>
-        </>}
-      >
-        <S.DeleteMessage>
-          {deleteSubject?.is_dir ? (
-            <>Delete the folder <code>/{deleteSubject?.path}</code>?</>
-          ) : (
-            <>Delete the file <code>/{deleteSubject?.path}</code>?</>
-          )}
-        </S.DeleteMessage>
-        {deleteSubject?.is_dir ? (
-          <S.DeleteOption $danger={deleteRecursive}>
-            <input
-              type="checkbox"
-              checked={deleteRecursive}
-              onChange={(e) => setDeleteRecursive(e.target.checked)}
-            />
-            <div>
-              <strong>Also delete contents recursively</strong>
-              <p>
-                Without this, only empty folders can be deleted; non-empty folders return an error.
-                Recursive delete cannot be undone.
-              </p>
-            </div>
-          </S.DeleteOption>
-        ) : (
-          <S.DeleteHint>This cannot be undone. The file is unlinked from the filesystem.</S.DeleteHint>
-        )}
-      </Modal>
+      {/* Delete modal: single-subject and bulk share the same shell.
+          The header, summary line and confirm-button label all adapt
+          to the count, so a multi-select that becomes a single-delete
+          (via a deselect mid-dialog) still reads correctly. The
+          recursive checkbox only shows when at least one folder is in
+          the selection — flat files don't need it. */}
+      {(() => {
+        const subjects = deleteSubjectsState
+        const n = subjects.length
+        const folderCount = subjects.reduce((acc, s) => acc + (s.is_dir ? 1 : 0), 0)
+        const fileCount = n - folderCount
+        const hasFolder = folderCount > 0
+        const single = n === 1 ? subjects[0] : null
+        const title =
+          n > 1 ? `Delete ${n} items`
+            : single?.is_dir ? 'Delete folder'
+              : 'Delete file'
+        const confirmLabel = hasFolder && deleteRecursive
+          ? (n > 1 ? `Delete ${n} items recursively` : 'Delete recursively')
+          : (n > 1 ? `Delete ${n} items` : 'Delete')
+        return (
+          <Modal
+            open={confirmDelete}
+            title={title}
+            onClose={closeDeleteDialog}
+            footer={<>
+              <Button variant="ghost" onClick={closeDeleteDialog}>Cancel</Button>
+              <Button variant="danger" onClick={submitDelete} disabled={n === 0}>{confirmLabel}</Button>
+            </>}
+          >
+            <S.DeleteMessage>
+              {single
+                ? (single.is_dir
+                    ? <>Delete the folder <code>/{single.path}</code>?</>
+                    : <>Delete the file <code>/{single.path}</code>?</>)
+                : <>
+                    Delete <strong>{n} items</strong>
+                    {folderCount > 0 && fileCount > 0 && <> ({folderCount} folder{folderCount === 1 ? '' : 's'}, {fileCount} file{fileCount === 1 ? '' : 's'})</>}
+                    {folderCount > 0 && fileCount === 0 && <> ({folderCount} folder{folderCount === 1 ? '' : 's'})</>}
+                    {folderCount === 0 && fileCount > 0 && <> ({fileCount} file{fileCount === 1 ? '' : 's'})</>}?
+                  </>}
+            </S.DeleteMessage>
+            {n > 1 && (
+              <S.DeleteList>
+                {subjects.map((s) => (
+                  <li key={s.path} className={s.is_dir ? 'dir' : 'file'} title={`/${s.path}`}>/{s.path}</li>
+                ))}
+              </S.DeleteList>
+            )}
+            {hasFolder ? (
+              <S.DeleteOption $danger={deleteRecursive}>
+                <input
+                  type="checkbox"
+                  checked={deleteRecursive}
+                  onChange={(e) => setDeleteRecursive(e.target.checked)}
+                />
+                <div>
+                  <strong>Also delete folder contents recursively</strong>
+                  <p>
+                    {n > 1
+                      ? <>Without this, only empty folders can be deleted; any non-empty folder in the selection will return an error. Recursive delete cannot be undone.</>
+                      : <>Without this, only empty folders can be deleted; non-empty folders return an error. Recursive delete cannot be undone.</>}
+                  </p>
+                </div>
+              </S.DeleteOption>
+            ) : (
+              <S.DeleteHint>
+                {n > 1 ? 'This cannot be undone. Every selected file is unlinked from the filesystem.' : 'This cannot be undone. The file is unlinked from the filesystem.'}
+              </S.DeleteHint>
+            )}
+            {deleteError && <S.DeleteError>{deleteError}</S.DeleteError>}
+          </Modal>
+        )
+      })()}
 
       {activeFile && activeMount && (
         <PermissionsPanel
