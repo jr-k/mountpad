@@ -420,6 +420,72 @@ export const AvatarButton = styled.button`
 `
 AvatarButton.displayName = 'SettingsPage.AvatarButton'
 
+// Field is the form-row wrapper that mirrors `<Input label>` styling
+// (small uppercase-ish label on top, control on a row of its own) but
+// lets callers compose a multi-child control (e.g. text input + sidekick
+// button). The label slot is the first inline child - typically a
+// <span>.
+export const Field = styled.label`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: ${({ theme }) => theme.font.size.sm};
+  color: ${({ theme }) => theme.color.textMuted};
+`
+Field.displayName = 'SettingsPage.Field'
+
+export const PathRow = styled.div`
+  display: flex;
+  gap: ${({ theme }) => theme.space[2]};
+  align-items: stretch;
+`
+PathRow.displayName = 'SettingsPage.PathRow'
+
+// PathControl matches Input/Control styling 1:1 - kept in sync by
+// re-declaring the tokens locally so the picker layout doesn't depend
+// on the generic <Input> component (which doesn't accept trailing
+// affordances).
+export const PathControl = styled.input`
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: ${({ theme }) => theme.color.bgElev};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  color: ${({ theme }) => theme.color.text};
+  font-family: ${({ theme }) => theme.font.mono};
+  font-size: ${({ theme }) => theme.font.size.md};
+  outline: none;
+  transition: border-color 120ms ease;
+  &:focus { border-color: ${({ theme }) => theme.color.accent}; }
+  &::placeholder { color: ${({ theme }) => theme.color.textFaint}; }
+`
+PathControl.displayName = 'SettingsPage.PathControl'
+
+export const PathPickerButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: ${({ theme }) => theme.color.bgElev};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  color: ${({ theme }) => theme.color.text};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 120ms ease, background 120ms ease;
+  &:hover {
+    border-color: ${({ theme }) => theme.color.borderStrong};
+    background: ${({ theme }) => theme.color.bgPanel};
+  }
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.color.accent};
+    outline-offset: 2px;
+  }
+`
+PathPickerButton.displayName = 'SettingsPage.PathPickerButton'
+
 export const HelpText = styled.p`
   margin: 0 0 ${({ theme }) => theme.space[3]};
   font-size: ${({ theme }) => theme.font.size.sm};

@@ -10,6 +10,7 @@ import { Logo } from '@/components/Logo'
 import { PermissionMatrix } from '@/components/PermissionMatrix'
 import { RowMenu } from '@/components/RowMenu'
 import { Avatar, AvatarColorPicker } from '@/components/Avatar'
+import { HostPathPicker } from '@/components/HostPathPicker'
 import { api, HttpError } from '@/lib/api'
 import { formatMode, modeToOctal } from '@/lib/permissions'
 import type { MountPoint } from '@/types/files'
@@ -102,6 +103,9 @@ const MountPointsSettingsPage: React.FC = () => {
 
   // Separate dialog so delete confirmations don't collide with the edit modal.
   const [deleting, setDeleting] = useState<MountPoint | null>(null)
+  // Folder picker modal for the Host path field. Decoupled state so
+  // opening it doesn't fight with the edit modal's input focus.
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const load = async () => setMounts((await api.get<MountPoint[] | null>('/api/mount-points')) ?? [])
   useEffect(() => { void load() }, [])
@@ -317,7 +321,30 @@ const MountPointsSettingsPage: React.FC = () => {
               value={form.slug}
               onChange={(e) => onSlugChange(e.target.value)}
             />
-            <Input label="Host path" placeholder="/storage/docs" value={form.host_path} onChange={(e) => setForm({ ...form, host_path: e.target.value })} />
+            <SP.Field>
+              <span>Host path</span>
+              <SP.PathRow>
+                <SP.PathControl
+                  placeholder="/storage/docs"
+                  value={form.host_path}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  onChange={(e) => setForm({ ...form, host_path: e.target.value })}
+                />
+                <SP.PathPickerButton
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  title="Browse the host filesystem"
+                  aria-label="Browse the host filesystem"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                  </svg>
+                  Browse
+                </SP.PathPickerButton>
+              </SP.PathRow>
+            </SP.Field>
             <Input label="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
@@ -415,6 +442,13 @@ const MountPointsSettingsPage: React.FC = () => {
               }}>{err}</div>
             )}
           </Modal>
+
+          <HostPathPicker
+            open={pickerOpen}
+            initialPath={form.host_path || '/'}
+            onClose={() => setPickerOpen(false)}
+            onPick={(p) => { setForm((prev) => ({ ...prev, host_path: p })); setPickerOpen(false) }}
+          />
 
           <ConfirmDialog
             open={deleting !== null}

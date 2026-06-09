@@ -26,8 +26,16 @@ export const ModalOverlay = styled.div`
 // width cap) prevents the dialog from ever exceeding the viewport,
 // so long content scrolls inside the body rather than running off
 // screen.
-export const Dialog = styled.div`
-  width: min(520px, 92vw);
+//
+// $width is keyed off the Modal `size` prop:
+//   md  (default) - 520px, the original size; fits short forms
+//                   (rename, password, confirm) without looking
+//                   under-utilised.
+//   lg            - 720px, for content that needs horizontal real
+//                   estate: folder pickers (long absolute paths),
+//                   permission matrices, table-like editors.
+export const Dialog = styled.div<{ $width: 'md' | 'lg' }>`
+  width: ${({ $width }) => ($width === 'lg' ? 'min(720px, 92vw)' : 'min(520px, 92vw)')};
   max-height: 92vh;
   display: flex;
   flex-direction: column;

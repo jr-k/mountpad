@@ -49,6 +49,7 @@ func NewRouter(d *Deps) http.Handler {
 	usersH := handlers.NewUsersHandler(d.Users)
 	groupsH := handlers.NewGroupsHandler(d.Groups)
 	mountsH := handlers.NewMountPointsHandler(d.MountsSvc)
+	hostH := handlers.NewHostHandler()
 
 	r.Group(func(r chi.Router) {
 		r.Use(d.Gate.Optional)
@@ -127,6 +128,11 @@ func NewRouter(d *Deps) http.Handler {
 				r.Post("/mount-points", mountsH.Create)
 				r.Patch("/mount-points/{id}", mountsH.Update)
 				r.Delete("/mount-points/{id}", mountsH.Delete)
+
+				// Read-only directory browser over the host filesystem
+				// visible to the container. Backs the folder-picker
+				// modal on the mount-points settings page.
+				r.Get("/host/browse", hostH.Browse)
 			})
 		})
 	})
