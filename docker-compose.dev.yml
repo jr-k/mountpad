@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mountpad
+      POSTGRES_PASSWORD: mountpad
+      POSTGRES_DB: mountpad
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mountpad"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      target: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MOUNTPAD_ENV: dev
+      MOUNTPAD_APP_NAME: ${MOUNTPAD_APP_NAME:-MountPad}
+      MOUNTPAD_HTTP_ADDR: ":4499"
+      MOUNTPAD_VITE_DEV: "true"
+      MOUNTPAD_VITE_URL: "http://localhost:5173"
+      MOUNTPAD_FRONTEND_DIST: "/app/frontend/dist"
+      MOUNTPAD_SESSION_SECRET: "dev-secret-change-me"
+      MOUNTPAD_SAFE_MODE: "false"
+      DB_DRIVER: postgres
+      DB_DSN: "postgres://mountpad:mountpad@postgres:5432/mountpad?sslmode=disable"
+    ports:
+      - "4499:4499"
+    volumes:
+      - .:/app
+      - /app/tmp
+      - ./examples/storage:/storage
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    command: sh -c "npm install --include=dev && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+      - frontend-node-modules:/app/frontend/node_modules
+
+volumes:
+  postgres-data:
+  frontend-node-modules:
