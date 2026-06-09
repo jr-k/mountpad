@@ -54,8 +54,13 @@ func ListDir(dirAbs string, manifestFilename string, showManifests bool) ([]DirE
 			if strings.HasPrefix(name, ".mountpad.acl.") && strings.HasSuffix(name, ".tmp") {
 				continue
 			}
-			// Hide the app-internal directory used to colocate SQLite DB and
-			// future internal files inside a user-facing /storage mount.
+			// Defensive hide for the legacy `.mountpad` directory that
+			// used to host the SQLite DB inside a user-facing /storage
+			// mount. New installs put the DB on a dedicated /data
+			// volume, but operators upgrading from older builds may
+			// still have a `.mountpad/` folder lying around - keep it
+			// invisible in the explorer so the dotfile doesn't surface
+			// next to user data.
 			if name == ".mountpad" && e.IsDir() {
 				continue
 			}

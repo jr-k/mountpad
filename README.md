@@ -53,7 +53,12 @@ docker compose up -d
 
 Then visit `http://localhost:4499` and create the first account.
 
-That brings up the production image on **SQLite**, with no extra services. Data lives in `${STORAGE_HOST_PATH}/.mountpad/mountpad.db` (defaults to `./storage/.mountpad/mountpad.db`), right next to your files so a single backup covers both.
+That brings up the production image on **SQLite**, with no extra services. Two host bind-mounts are created next to your `.env`:
+
+- `${STORAGE_HOST_PATH}` → `/storage` - your mount points data (defaults to `./storage`).
+- `${DATA_HOST_PATH}` → `/data` - the SQLite DB and any future app state (defaults to `./data`).
+
+Keeping them separate means `/storage` stays purely for the files you expose, and a single backup of `/data` captures the app state regardless of which mounts are configured.
 
 ## Choosing the database
 
@@ -61,11 +66,11 @@ The engine is picked at runtime via the `DB_ENGINE` variable in your `.env`. The
 
 ### SQLite (default)
 
-Nothing to configure. The DB file path is `DB_FILE` (defaults to `/storage/.mountpad/mountpad.db` inside the container, which lands inside your bind-mounted storage on the host).
+Nothing to configure. The DB file path is `DB_FILE` (defaults to `/data/mountpad.db` inside the container, which lands inside the `DATA_HOST_PATH` bind-mount on the host).
 
 ```env
 DB_ENGINE=sqlite
-DB_FILE=/storage/.mountpad/mountpad.db
+DB_FILE=/data/mountpad.db
 ```
 
 ### PostgreSQL

@@ -103,9 +103,12 @@ func (h *FSHandler) writeError(w http.ResponseWriter, err error) {
 }
 
 // rejectManifest ensures the user-provided relative path does NOT target a
-// manifest file or the app-internal `.mountpad` directory, unless the
+// manifest file or the legacy `.mountpad` directory, unless the
 // admin/debug flag is on. ALL path segments are inspected (not just the
-// basename) to block requests like ".mountpad/mountpad.db".
+// basename) to block requests like ".mountpad/anything" - kept as a
+// defensive guard for upgraded installs that may still have a stray
+// `.mountpad/` folder left over from when the SQLite DB lived under
+// /storage.
 func (h *FSHandler) rejectManifest(rel string, isAdmin bool) error {
 	if h.Cfg.ShowManifests && isAdmin {
 		return nil
