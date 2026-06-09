@@ -1,23 +1,29 @@
 SHELL := /bin/bash
 
-.PHONY: help dev dev-sqlite build build-dev test test-go test-front migrate seed-admin clean tidy
+.PHONY: help up up-postgres down dev build build-dev tidy clean
 
 help:
 	@echo 'Targets:'
-	@echo '  dev          - start dev stack with PostgreSQL'
-	@echo '  dev-sqlite   - start dev stack with SQLite'
+	@echo '  up           - start production stack (SQLite, default)'
+	@echo '  up-postgres  - start production stack with bundled Postgres'
+	@echo '  down         - stop the production stack'
+	@echo '  dev          - start dev stack (hot reload + Postgres)'
 	@echo '  build        - build production image'
 	@echo '  build-dev    - build dev image'
 	@echo '  tidy         - go mod tidy'
-	@echo '  migrate      - run migrations via the binary'
-	@echo '  seed-admin   - bootstrap admin from env'
 	@echo '  clean        - remove build artefacts'
+
+up:
+	docker compose up -d --build
+
+up-postgres:
+	docker compose --profile postgres up -d --build
+
+down:
+	docker compose --profile postgres down
 
 dev:
 	docker compose -f docker-compose.dev.yml up --build
-
-dev-sqlite:
-	docker compose -f docker-compose.dev.sqlite.yml up --build
 
 build:
 	docker build --target prod -t mountpad:latest .
@@ -27,12 +33,6 @@ build-dev:
 
 tidy:
 	go mod tidy
-
-migrate:
-	go run ./cmd/mountpad
-
-seed-admin:
-	go run ./cmd/mountpad
 
 clean:
 	rm -rf tmp/ frontend/dist

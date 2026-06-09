@@ -10,6 +10,6 @@
 package version
 
 // Version is the human-readable release tag of this build. Keep it
-// short — the status bar in the frontend prints it as plain text
+// short - the status bar in the frontend prints it as plain text
 // after the GitHub link.
 var Version = "dev"

@@ -1,0 +1,87 @@
+# MountPad - single production-ready Compose file.
+#
+# Engine is selected via DB_ENGINE in your .env (default: sqlite).
+#   • sqlite   → no extra service, data lives in $DB_FILE on the host
+#                bind-mount.
+#   • postgres → add `--profile postgres` (or set COMPOSE_PROFILES=postgres
+#                in .env) so the bundled Postgres service comes up alongside
+#                the app.
+#
+# Example: `docker compose up -d` (SQLite, default)
+#          `docker compose --profile postgres up -d` (Postgres)
+#
+# Every variable below has a sane fallback so the file stays usable even
+# with a bare .env that only sets MOUNTPAD_SESSION_SECRET.
+
+services:
+  app:
+    build:
+      context: .
+      target: prod
+    image: mountpad:latest
+    restart: unless-stopped
+    # depends_on with `required: false` lets the postgres service be
+    # optional: when the `postgres` profile is inactive, Compose skips
+    # the dependency entirely instead of erroring out. Requires
+    # Compose v2.20+ (ships with recent Docker Desktop / Engine).
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    environment:
+      MOUNTPAD_ENV: prod
+      MOUNTPAD_APP_NAME: ${MOUNTPAD_APP_NAME:-MountPad}
+      MOUNTPAD_HTTP_ADDR: ":4499"
+      MOUNTPAD_PUBLIC_URL: ${MOUNTPAD_PUBLIC_URL:-http://localhost:4499}
+      MOUNTPAD_SESSION_SECRET: ${MOUNTPAD_SESSION_SECRET:?MOUNTPAD_SESSION_SECRET is required}
+      MOUNTPAD_COOKIE_SECURE: ${MOUNTPAD_COOKIE_SECURE:-false}
+      MOUNTPAD_SAFE_MODE: ${MOUNTPAD_SAFE_MODE:-false}
+
+      # Engine selector + decomposed per-engine variables. The app
+      # builds the DSN itself from these; DB_DSN is only needed for
+      # exotic setups not covered by the decomposed variables.
+      DB_ENGINE: ${DB_ENGINE:-sqlite}
+
+      # SQLite - file lives inside the bind-mounted /storage so it's
+      # backed up alongside the user data and stays out of the
+      # explorer (dotfile parent directory).
+      DB_FILE: ${DB_FILE:-/storage/.mountpad/mountpad.db}
+
+      # Postgres - points at the bundled `postgres` service by default.
+      # Override host/port to talk to an external cluster instead.
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-mountpad}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_NAME: ${DB_NAME:-mountpad}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+    ports:
+      - "${MOUNTPAD_PORT:-4499}:4499"
+    volumes:
+      - ${STORAGE_HOST_PATH:-./storage}:/storage
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # `postgres` profile gates this whole service: leave it out of the
+    # active profiles and the SQLite setup runs alone, with no Postgres
+    # container pulled, started, or volume-claimed.
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: ${DB_USER:-mountpad}
+      # `:?` would short-circuit `docker compose config` even when the
+      # `postgres` profile is inactive, so we use a default instead.
+      # Set a real DB_PASSWORD in .env when you actually run with the
+      # postgres profile - the value here is just a placeholder so the
+      # file stays valid for the default (SQLite) path.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mountpad}
+      POSTGRES_DB: ${DB_NAME:-mountpad}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mountpad} -d ${DB_NAME:-mountpad}"]
+      interval: 10s
+      retries: 5
+
+volumes:
+  postgres-data:

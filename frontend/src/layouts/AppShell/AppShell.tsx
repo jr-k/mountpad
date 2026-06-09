@@ -88,7 +88,7 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main, sta
 
   // Resizable explorer pane (desktop only). The width is fed into the
   // outer grid through a CSS custom property so the mobile media
-  // queries — which collapse the explorer into a drawer — can simply
+  // queries - which collapse the explorer into a drawer - can simply
   // override the rule without needing to know anything about state.
   const explorerResize = useHorizontalResize({
     initial: EXPLORER_DEFAULT,
@@ -115,7 +115,7 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main, sta
   // back to closed. The drawer + backdrop are visually no-ops on
   // desktop (PanelGroup becomes `display: contents`), BUT the
   // Backdrop is `position: fixed; inset: 0` and would otherwise
-  // remain mounted across the breakpoint — dimming the page and
+  // remain mounted across the breakpoint - dimming the page and
   // intercepting every click. Resizing across the breakpoint is rare
   // for end users but devtools / split-screen / orientation changes
   // do hit it, and the failure mode (unresponsive UI) is bad enough

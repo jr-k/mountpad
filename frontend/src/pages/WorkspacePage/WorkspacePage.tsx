@@ -5,6 +5,7 @@ import { MountPointSidebar } from '@/components/MountPointSidebar'
 import { FileExplorer } from '@/components/FileExplorer'
 import { DirectoryView } from '@/components/DirectoryView'
 import { TextEditor } from '@/components/TextEditor'
+import { HexEditor } from '@/components/HexEditor'
 import { FileToolbar } from '@/components/FileToolbar'
 import { FileDetailsPanel } from '@/components/FileDetailsPanel'
 import { PermissionsPanel } from '@/components/PermissionsPanel'
@@ -24,6 +25,31 @@ import type { SharedProps } from '@/types/inertia'
 import * as S from './styled'
 
 type EditorStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+
+// downloadErrorMessage maps the backend's terse plaintext error
+// responses into something a human can act on. The server already
+// uses stable phrases (see writeError in handlers/fs.go), so we
+// match on them rather than relying on status codes alone - a
+// "403" can mean three different things here.
+function downloadErrorMessage(status: number, body: string, subjects: { name?: string; path: string }[]): string {
+  const subjectLabel = subjects.length === 1
+    ? (subjects[0].name || subjects[0].path || 'this item')
+    : `${subjects.length} items`
+  switch (body) {
+    case 'symlink not allowed':
+      return `“${subjectLabel}” is a symbolic link. The server is configured to refuse symlink downloads to prevent leaking files from outside the mount point.`
+    case 'permission denied':
+      return `You don't have permission to download “${subjectLabel}”.`
+    case 'not found':
+      return `“${subjectLabel}” was not found. It may have been moved or deleted by someone else.`
+    case 'manifest protected':
+      return `“${subjectLabel}” is an internal mountpad metadata file and cannot be downloaded.`
+    case 'invalid path':
+      return `The path for “${subjectLabel}” is invalid.`
+    default:
+      return body || `Download failed (HTTP ${status}).`
+  }
+}
 
 const WorkspacePage: React.FC = () => {
   const { props } = usePage<SharedProps & Record<string, unknown>>()
@@ -84,6 +110,19 @@ const WorkspacePage: React.FC = () => {
   const [statusLabel, setStatusLabel] = useState<string>('')
   const [explorerKey, setExplorerKey] = useState(0)
   const [loadingFile, setLoadingFile] = useState(false)
+  // Binary preview state. Populated when openFile resolves on a
+  // non-text file: the hex view renders `binaryBytes`, and
+  // `binaryMeta` carries the original-on-disk size + truncation
+  // flag so the header can say "showing 256 KiB of 1.3 MiB".
+  // Both are cleared when a text file (or no file) takes over so
+  // the previous binary doesn't bleed into the next selection.
+  const [binaryBytes, setBinaryBytes] = useState<Uint8Array | null>(null)
+  const [binaryMeta, setBinaryMeta] = useState<{ size?: number; truncated?: boolean } | null>(null)
+  // isSymlink is sourced from the Read response and flips the text
+  // editor into read-only mode (the write endpoint won't mutate
+  // through a symlink, so letting the user type would just queue a
+  // guaranteed save failure).
+  const [isSymlink, setIsSymlink] = useState(false)
 
   const [showCreateFile, setShowCreateFile] = useState(false)
   const [showCreateDir, setShowCreateDir] = useState(false)
@@ -138,7 +177,11 @@ const WorkspacePage: React.FC = () => {
     })
   }, [])
 
-  const dirty = content !== origContent && !!activeFile && !activeFile.is_dir
+  // Symlinks are read-only: the write endpoint refuses to mutate
+  // through them, so we force dirty=false even if content somehow
+  // drifts from origContent (defensive - the TextEditor is already
+  // non-editable). Keeps Cmd+S a no-op and greys the Save button.
+  const dirty = content !== origContent && !!activeFile && !activeFile.is_dir && !isSymlink
   useDirty(dirty)
 
   useEffect(() => { setStatus(dirty ? 'dirty' : (activeFile ? 'idle' : 'idle')) }, [dirty, activeFile])
@@ -156,8 +199,16 @@ const WorkspacePage: React.FC = () => {
     setActiveDir(folderPath)
   }, [activeMount])
 
-  const openFile = useCallback(async (entry: FileEntry) => {
-    if (!activeMount) return
+  // openFile takes an optional `mountOverride` so the URL-restore path
+  // (which sets activeMount and immediately wants to open a file in
+  // the SAME tick) can pass the freshly-resolved mount instead of
+  // reading the closure's stale activeMount value, which is still
+  // null until React commits the next render. Every other caller
+  // (sidebar, explorer, breadcrumb) just calls openFile(entry) and
+  // relies on activeMount being already set.
+  const openFile = useCallback(async (entry: FileEntry, mountOverride?: MountPoint) => {
+    const mount = mountOverride ?? activeMount
+    if (!mount) return
     setActiveFile(entry)
     // For a folder we also move the working directory there: that way the
     // "+ File / + Folder" toolbar actions and the DirectoryView both target
@@ -167,18 +218,48 @@ const WorkspacePage: React.FC = () => {
       setActiveDir(entry.path)
       return
     }
+    // Optimistic readonly flip: if the listing already flagged this
+    // entry as a symlink, the editor renders in read-only mode the
+    // moment we set activeFile (no flash of writable editor before
+    // the read response comes back). The follow-up Read response
+    // re-confirms via res.is_symlink in case the entry changed on
+    // disk between list and read.
+    setIsSymlink(!!entry.is_symlink)
     const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
     setActiveDir(parent)
     setLoadingFile(true)
     try {
-      const res = await fsApi(activeMount.id).read(entry.path)
+      const res = await fsApi(mount.id).read(entry.path)
+      setIsSymlink(!!res.is_symlink || !!entry.is_symlink)
       if (res.is_binary) {
+        // Text-editor state is cleared so a previous textual file
+        // doesn't leak into the hex view (and so `dirty` resolves
+        // to false: hex is read-only).
         setContent('')
         setOrigContent('')
-        setStatus('error')
-        setStatusLabel('Binary file (preview not supported)')
+        setChecksum('')
+        setMtime(res.modified_at)
+        setStatus('idle')
+        setStatusLabel('')
+        if (res.content_base64) {
+          // atob → byte string → Uint8Array. Cheap and correct for
+          // payloads under our 256 KiB server cap; for larger
+          // previews we'd switch to a chunked decoder.
+          const bin = atob(res.content_base64)
+          const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          setBinaryBytes(bytes)
+        } else {
+          setBinaryBytes(new Uint8Array(0))
+        }
+        setBinaryMeta({ size: res.size, truncated: res.truncated })
         return
       }
+      // Text path: clear any leftover binary preview from a prior
+      // selection so the hex view doesn't briefly flash before the
+      // text editor takes over.
+      setBinaryBytes(null)
+      setBinaryMeta(null)
       setContent(res.content ?? '')
       setOrigContent(res.content ?? '')
       setChecksum(res.checksum ?? '')
@@ -234,7 +315,7 @@ const WorkspacePage: React.FC = () => {
   //   1. A DirectoryView selection of exactly one entry.
   //   2. A file currently being edited (activeFile is a file).
   // Browsing into a folder via the sidebar/breadcrumb does NOT make
-  // that folder a target — renaming the folder you are *inside*
+  // that folder a target - renaming the folder you are *inside*
   // belongs to the breadcrumb leaf pencil instead, where the action
   // is visually unambiguous.
   const actionTarget = useMemo<FileEntry | null>(() => {
@@ -242,16 +323,66 @@ const WorkspacePage: React.FC = () => {
     if (activeFile && !activeFile.is_dir) return activeFile
     return null
   }, [selectedEntry, activeFile])
-  // Rename only ever makes sense with a single subject. Delete works
-  // for both single and bulk, so it follows the wider selectedEntries
-  // array (with the open file as a fallback when nothing is selected).
-  const canRename = !!actionTarget
+  // The toolbar Rename button is reserved for a *DirectoryView*
+  // single-selection. When the workspace is parked on an open file
+  // (editor mode) the breadcrumb pencil already covers renaming the
+  // file, so duplicating the affordance with a second button on the
+  // right would just add visual noise. Delete still works for both
+  // single and bulk targets, hence the wider deleteSubjects below.
+  const canRename = !!selectedEntry
   const deleteSubjects = useMemo<FileEntry[]>(() => {
     if (selectedEntries.length > 0) return selectedEntries
     if (actionTarget) return [actionTarget]
     return []
   }, [selectedEntries, actionTarget])
   const canDelete = deleteSubjects.length > 0
+  // Download resolves to the same subject set as Delete: a current
+  // DirectoryView selection (single or bulk) takes precedence, and
+  // when nothing is selected we fall back to the actionTarget so the
+  // editor-mode toolbar can grab the currently open file (text OR
+  // hex). The backend streams one file raw and zips anything else.
+  const downloadSubjects = deleteSubjects
+  const canDownload = downloadSubjects.length > 0
+  // downloadError surfaces server-side rejections (symlink not
+  // allowed, permission denied, missing path...) in a real modal
+  // instead of the plaintext "symlink not allowed" page that the
+  // browser would otherwise navigate to when `<a download>` follows
+  // a non-2xx response.
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const triggerDownload = useCallback(async () => {
+    if (!activeMount || downloadSubjects.length === 0) return
+    const paths = downloadSubjects.map((e) => e.path)
+    const url = fsApi(activeMount.id).downloadUrl(paths)
+    try {
+      // Dry-run first: the backend runs the same validation the
+      // real download would (ACL, manifest, symlink, existence) but
+      // returns 204 without streaming a single byte. Cheap, and
+      // means a download that's going to fail fails BEFORE the
+      // browser commits to the navigation.
+      const check = await fetch(url + '&check=1', { credentials: 'same-origin' })
+      if (!check.ok) {
+        const body = (await check.text()).trim()
+        setDownloadError(
+          downloadErrorMessage(check.status, body, downloadSubjects),
+        )
+        return
+      }
+    } catch {
+      setDownloadError('Could not reach the server. Check your connection and try again.')
+      return
+    }
+    // Hidden anchor instead of window.location: keeps the current
+    // SPA navigation intact (no page replacement), and the explicit
+    // `download` attribute nudges browsers that might otherwise try
+    // to render the content inline (e.g. text/plain previews).
+    const a = document.createElement('a')
+    a.href = url
+    a.rel = 'noopener'
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }, [activeMount, downloadSubjects])
 
   // Drop any DirectoryView selection whenever the listing context shifts
   // (different mount, or a different folder shown in the main pane). A
@@ -306,7 +437,7 @@ const WorkspacePage: React.FC = () => {
     setShowRename(false); setRenameValue(''); setRenameSubject(null)
     // Carry the highlight onto the renamed entry instead of clearing
     // the selection blindly. The three checks below aren't mutually
-    // exclusive — when the user clicked into a folder, activeFile
+    // exclusive - when the user clicked into a folder, activeFile
     // AND activeDir both point at the same path, so renaming it
     // needs to update both for the URL, breadcrumb and DirectoryView
     // listing to all converge on the new name.
@@ -317,7 +448,7 @@ const WorkspacePage: React.FC = () => {
     //     workspace doesn't strand itself on a now-stale path.
     //   - neither: the renamed entry is just highlighted in
     //     DirectoryView. Hand the new path to DirectoryView as a
-    //     pendingFocus — it'll re-select + cursor that row once
+    //     pendingFocus - it'll re-select + cursor that row once
     //     the refresh lands, and our onSelectionChange wiring will
     //     push selectedEntry back to a fresh FileEntry automatically.
     const hitsActiveFile = !!activeFile && activeFile.path === from
@@ -332,7 +463,7 @@ const WorkspacePage: React.FC = () => {
       setPendingFocus(to)
     }
     // Always hand the rename hint to FileExplorer so its persisted
-    // expanded-folders set follows the path rewrite — even for file
+    // expanded-folders set follows the path rewrite - even for file
     // renames, where the entry itself isn't in `expanded`, the call
     // is a cheap no-op (rewriteExpanded short-circuits when no path
     // matches the prefix).
@@ -358,8 +489,21 @@ const WorkspacePage: React.FC = () => {
     })
   }
 
+  // renameLeaf dispatches the breadcrumb pencil based on what the
+  // leaf actually points at:
+  //   • file mode  → rename the open file (the activeFile entry).
+  //   • dir mode   → rename the current folder (activeDir).
+  // Returns undefined when there is no leaf to rename so the
+  // breadcrumb hides the pencil entirely instead of rendering a
+  // dead button.
+  const renameLeaf: (() => void) | undefined = (() => {
+    if (activeFile && !activeFile.is_dir) return () => openRenameDialog(activeFile)
+    if (activeDir) return renameCurrentFolder
+    return undefined
+  })()
+
   // openDeleteDialog accepts either an explicit subject (legacy single-
-  // entry call site) or falls back to the live `deleteSubjects` memo —
+  // entry call site) or falls back to the live `deleteSubjects` memo -
   // which itself already prefers a multi-selection over the open-file
   // fallback, so there's no further branching needed here.
   const openDeleteDialog = (subject?: FileEntry | null) => {
@@ -470,7 +614,11 @@ const WorkspacePage: React.FC = () => {
         setActiveDir(entry.path)
         setActiveFile(entry)
       } else {
-        await openFile(entry)
+        // mount is passed through so openFile doesn't read the
+        // (still-null) activeMount closure value on the very first
+        // render after a refresh - that was making file URLs fall
+        // back to the explorer view on reload.
+        await openFile(entry, mount)
       }
     } catch {
       setActiveDir('')
@@ -504,7 +652,7 @@ const WorkspacePage: React.FC = () => {
   //         history entry, not three.
   //      c. When a `popstate` brings the URL back to a target our state
   //         is converging towards, the equality check below short-circuits
-  //         the sync — no spurious push, no recursive loop.
+  //         the sync - no spurious push, no recursive loop.
   const firstUrlSyncDone = useRef(false)
   useEffect(() => {
     if (!urlInitialized.current) return
@@ -631,18 +779,18 @@ const WorkspacePage: React.FC = () => {
             steps={user?.is_admin ? [
               {
                 number: 1,
+                title: 'Give it a name',
+                description: <>The name is what shows up in the sidebar.</>,
+              },
+              {
+                number: 2,
                 title: 'Pick a host path',
                 description: <>Choose an absolute directory inside the container, most often a subfolder of <code>/storage</code>.</>,
               },
               {
-                number: 2,
-                title: 'Give it a slug and a name',
-                description: <>The slug is URL-safe (<code>a-z0-9-</code>); the name is what shows up in the sidebar.</>,
-              },
-              {
                 number: 3,
                 title: 'Set a default permission mode',
-                description: <>It controls who can read, write, and execute newly created files when no explicit ACL is set.</>,
+                description: <>It controls who can read, write, and execute files when no explicit ACL is set.</>,
               },
             ] : undefined}
             actions={
@@ -712,15 +860,15 @@ const WorkspacePage: React.FC = () => {
               canRename={canRename}
               canDelete={canDelete}
               deleteCount={deleteSubjects.length}
-              /* The pencil on the breadcrumb leaf is the one and only
-                 way to rename the folder the workspace is currently
-                 displaying. We pass it only in folder-listing mode so
-                 it never shows up next to a file leaf. */
-              onRenameLeaf={
-                !!activeDir && (!activeFile || activeFile.is_dir)
-                  ? renameCurrentFolder
-                  : undefined
-              }
+              canDownload={canDownload}
+              downloadCount={downloadSubjects.length}
+              onDownload={triggerDownload}
+              /* The pencil on the breadcrumb leaf renames whatever
+                 the workspace is currently *parked on*: the open
+                 file in editor mode, the active folder in listing
+                 mode. The mount-root crumb itself stays pencil-free
+                 - renaming a mount is a settings-page concern. */
+              onRenameLeaf={renameLeaf}
               showDetails={showDetails}
               onToggleDetails={toggleDetails}
             />
@@ -769,7 +917,19 @@ const WorkspacePage: React.FC = () => {
                       />
                     )
                   : activeFile && !activeFile.is_dir
-                    ? <TextEditor value={content} onChange={setContent} status={statusLabel} fileName={activeFile.path} />
+                    ? (binaryBytes
+                        ? <HexEditor bytes={binaryBytes} totalSize={binaryMeta?.size} truncated={binaryMeta?.truncated} />
+                        : <TextEditor
+                            value={content}
+                            onChange={setContent}
+                            status={statusLabel}
+                            fileName={activeFile.path}
+                            readOnly={isSymlink}
+                            readOnlyReason={isSymlink ? {
+                              title: 'Symbolic link - read-only',
+                              body: 'This file is a symbolic link. Editing through a symlink would silently overwrite whatever it points at, so MountPad lets you read the target content but not save back. Open the target file directly to make changes.',
+                            } : undefined}
+                          />)
                     : <EmptyState title="Open a file" description="Select a file in the explorer to start editing." />
                 }
               </S.EditorWrap>
@@ -823,7 +983,7 @@ const WorkspacePage: React.FC = () => {
           to the count, so a multi-select that becomes a single-delete
           (via a deselect mid-dialog) still reads correctly. The
           recursive checkbox only shows when at least one folder is in
-          the selection — flat files don't need it. */}
+          the selection - flat files don't need it. */}
       {(() => {
         const subjects = deleteSubjectsState
         const n = subjects.length
@@ -903,6 +1063,22 @@ const WorkspacePage: React.FC = () => {
           onSaved={() => setExplorerKey((k) => k + 1)}
         />
       )}
+
+      {/* Reuses the standard Modal portal so it sits above the file
+          explorer and the toolbar overlays correctly. Single-button
+          footer because there's no second action that makes sense:
+          either the user re-tries, or they cancel - and "cancel" is
+          implicit when the dialog is dismissed. */}
+      <Modal
+        open={!!downloadError}
+        title="Download unavailable"
+        onClose={() => setDownloadError(null)}
+        footer={
+          <Button variant="primary" onClick={() => setDownloadError(null)}>OK</Button>
+        }
+      >
+        <S.DownloadError>{downloadError}</S.DownloadError>
+      </Modal>
     </>
   )
 }

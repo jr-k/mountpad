@@ -4,6 +4,21 @@ A small, self-hosted file station for your server.
 
 Point it at a folder, sign in from the browser, and share access with the people you trust. That is the whole idea.
 
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/imgs/s1.png" alt="MountPad sign-in screen" />
+      <br />
+      <sub>Sign in</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/imgs/s2.png" alt="MountPad workspace with file explorer and editor" />
+      <br />
+      <sub>Workspace</sub>
+    </td>
+  </tr>
+</table>
+
 ## Why
 
 You have a server. You have files on it. You want to browse them, edit a config, drop in a backup, hand a folder to a teammate, without opening an SSH session and without shipping the data off to a third party.
@@ -28,13 +43,63 @@ Add a mount, set who can do what, and move on.
 
 ## Getting started
 
-Copy the example env file, start the container, open the app:
+Copy the example env file, set a session secret, start the container, open the app:
 
 ```bash
-cp .env.sqlite.example .env
-docker compose -f docker-compose.dev.sqlite.yml up
+cp .env.example .env
+# edit .env and set MOUNTPAD_SESSION_SECRET (e.g. `openssl rand -hex 32`)
+docker compose up -d
 ```
 
 Then visit `http://localhost:4499` and create the first account.
 
-That is the whole pitch. Have fun.
+That brings up the production image on **SQLite**, with no extra services. Data lives in `${STORAGE_HOST_PATH}/.mountpad/mountpad.db` (defaults to `./storage/.mountpad/mountpad.db`), right next to your files so a single backup covers both.
+
+## Choosing the database
+
+The engine is picked at runtime via the `DB_ENGINE` variable in your `.env`. There is only one Compose file - switching engines is a flag, not a different stack.
+
+### SQLite (default)
+
+Nothing to configure. The DB file path is `DB_FILE` (defaults to `/storage/.mountpad/mountpad.db` inside the container, which lands inside your bind-mounted storage on the host).
+
+```env
+DB_ENGINE=sqlite
+DB_FILE=/storage/.mountpad/mountpad.db
+```
+
+### PostgreSQL
+
+Set `DB_ENGINE=postgres`, fill in the connection details, and bring the stack up with the `postgres` profile so the bundled Postgres service starts alongside the app:
+
+```env
+DB_ENGINE=postgres
+DB_HOST=postgres       # service name in docker-compose.yml; point elsewhere for an external cluster
+DB_PORT=5432
+DB_USER=mountpad
+DB_PASSWORD=please-change-me
+DB_NAME=mountpad
+DB_SSLMODE=disable
+```
+
+```bash
+docker compose --profile postgres up -d
+```
+
+The same `DB_USER` / `DB_PASSWORD` / `DB_NAME` values are reused to initialise the bundled Postgres container, so there's only one source of truth.
+
+Need an exotic DSN (e.g. unix socket, custom search_path)? Set `DB_DSN` and it wins over the decomposed variables.
+
+## Updating
+
+```bash
+git pull
+docker compose up -d --build         # SQLite
+docker compose --profile postgres up -d --build   # Postgres
+```
+
+Migrations run automatically on startup.
+
+## Have fun
+
+That is the whole pitch.

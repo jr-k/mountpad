@@ -47,8 +47,16 @@ type MountPoint struct {
 	// override; empty means "use the deterministic palette entry for
 	// this id". Added in migration 0003 so old rows scan as "".
 	AvatarColor string    `json:"avatar_color"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// FollowSymlinks is the per-mount override of the global
+	// MOUNTPAD_FOLLOW_SYMLINK env var. It can only TIGHTEN the
+	// global setting: when global is off, this field is ignored
+	// (nothing follows symlinks); when global is on, the effective
+	// behaviour is `global && mount.FollowSymlinks`. Defaults to
+	// true so existing rows behave like before the column was
+	// introduced. See migration 0004.
+	FollowSymlinks bool      `json:"follow_symlinks"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Session struct {
@@ -71,4 +79,11 @@ type FileEntry struct {
 	GroupName   string    `json:"group_name,omitempty"`
 	Mode        uint16    `json:"mode"`
 	HasManifest bool      `json:"has_manifest,omitempty"`
+	// IsSymlink is true when the on-disk entry is a symbolic link.
+	// Surfaced in both the List response (so the file explorer can
+	// tag rows up-front) and the Read response (so the editor knows
+	// to render read-only and surface the explanatory banner BEFORE
+	// the user wastes keystrokes on a file the write endpoint will
+	// refuse to update).
+	IsSymlink bool `json:"is_symlink,omitempty"`
 }

@@ -2,7 +2,7 @@ import styled from 'styled-components'
 
 // Row is the full-width clickable strip for a tree entry. We render it as
 // a <div> (not a <button>) because the disclosure chevron in front needs
-// to be its own button — nesting a <button> inside another <button> is
+// to be its own button - nesting a <button> inside another <button> is
 // invalid HTML and confuses screen readers. Keyboard focus is preserved
 // via tabIndex + role on the consumer side.
 export const FileTreeItemRow = styled.div<{
@@ -27,7 +27,7 @@ export const FileTreeItemRow = styled.div<{
   box-shadow: ${({ $dropTarget, theme }) =>
     $dropTarget ? `inset 0 0 0 1px ${theme.color.accent}` : 'none'};
   /* Prevent the second click of a double-click from selecting the entry
-     name as plain text — that would feel jarring in a file-manager UX,
+     name as plain text - that would feel jarring in a file-manager UX,
      where double-click means "open". */
   user-select: none;
   &:hover { background: ${({ $active, $dropTarget, theme }) =>

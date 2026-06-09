@@ -147,3 +147,15 @@ export const DeleteError = styled.p`
   border-radius: ${({ theme }) => theme.radius.md};
 `
 DeleteError.displayName = 'WorkspacePage.DeleteError'
+
+// DownloadError mirrors DeleteError but lives inside its own dedicated
+// modal (rather than tacked onto another dialog). The styling matches
+// intentionally so the user reads the two error treatments as part of
+// the same family.
+export const DownloadError = styled.p`
+  margin: 0;
+  font-size: ${({ theme }) => theme.font.size.md};
+  line-height: 1.5;
+  color: ${({ theme }) => theme.color.text};
+`
+DownloadError.displayName = 'WorkspacePage.DownloadError'

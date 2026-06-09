@@ -17,6 +17,13 @@ export interface AppInfo {
    * Rendered in the status bar at the bottom of the app shell.
    */
   version?: string
+  /**
+   * Effective MOUNTPAD_FOLLOW_SYMLINK env-var setting. When false,
+   * the per-mount `follow_symlinks` column is ignored at runtime
+   * (the global flag is restrictive), so the settings UI uses this
+   * to grey out the per-mount checkbox with an explanatory note.
+   */
+  follow_symlinks?: boolean
 }
 
 export interface SharedProps {

@@ -8,7 +8,7 @@
 export {
   // The wrapping shell is borrowed from LoginPage but re-exported under a
   // SetupPage-specific name so consumers see <S.SetupPageRoot> rather than
-  // the unrelated <S.LoginPageRoot> — the prefix convention stays clean
+  // the unrelated <S.LoginPageRoot> - the prefix convention stays clean
   // even when one page reuses another's chrome.
   LoginPageRoot as SetupPageRoot,
   Frame,

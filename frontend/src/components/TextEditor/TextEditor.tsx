@@ -18,6 +18,15 @@ interface TextEditorProps {
   status?: string
   readOnly?: boolean
   /**
+   * Optional explanatory banner shown centered above the editor while
+   * `readOnly` is true. Pass the title + body and the editor renders
+   * a translucent overlay that blocks typing visually (CodeMirror is
+   * already non-editable under the hood) and tells the user WHY.
+   * Without it, a readOnly editor just silently swallows keystrokes,
+   * which feels broken.
+   */
+  readOnlyReason?: { title: string; body: string }
+  /**
    * The file's path or name; used to detect the language for highlighting
    * (e.g. `src/main.tsx` → TypeScript JSX). When omitted, the editor falls
    * back to plain text with line numbers but no token coloring.
@@ -85,7 +94,7 @@ const buildEditorTheme = (palette: Theme) => {
   )
 }
 
-export const TextEditor: React.FC<TextEditorProps> = ({ value, onChange, status, readOnly, fileName }) => {
+export const TextEditor: React.FC<TextEditorProps> = ({ value, onChange, status, readOnly, readOnlyReason, fileName }) => {
   const palette = useTheme() as Theme
   const isDark = palette.appearance === 'dark'
 
@@ -137,6 +146,14 @@ export const TextEditor: React.FC<TextEditorProps> = ({ value, onChange, status,
           height="100%"
           style={{ height: '100%' }}
         />
+        {readOnly && readOnlyReason && (
+          <S.ReadonlyOverlay>
+            <S.ReadonlyCard role="status">
+              <S.ReadonlyTitle>{readOnlyReason.title}</S.ReadonlyTitle>
+              <S.ReadonlyBody>{readOnlyReason.body}</S.ReadonlyBody>
+            </S.ReadonlyCard>
+          </S.ReadonlyOverlay>
+        )}
       </S.EditorWrap>
       <S.StatusBar>
         <S.StatusLeft>

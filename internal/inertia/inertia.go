@@ -57,6 +57,14 @@ func New(cfg *config.Config, sessions *auth.SessionManager, mounts *repositories
 	i.ShareProp("app", map[string]any{
 		"name":    cfg.AppName,
 		"version": version.Version,
+		// follow_symlinks exposes the global env-var toggle so the
+		// mount-points settings page can grey out the per-mount
+		// checkbox when the global flag is off (in that case the
+		// per-mount column is ignored - nothing follows symlinks
+		// regardless of the per-mount setting). The actual runtime
+		// check still ANDs both server-side; this is purely a UX
+		// affordance.
+		"follow_symlinks": cfg.FollowSymlinks,
 	})
 	i.ShareProp("flash", map[string]any{})
 	return i, nil

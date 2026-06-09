@@ -55,7 +55,7 @@ export const RowMenuTrigger = styled.button<{ $open?: boolean }>`
 RowMenuTrigger.displayName = 'RowMenu.Trigger'
 
 // Tiny fade+rise animation on open so the menu does not pop in abruptly.
-// Keep it short — 90ms — so power users moving between rows do not feel a
+// Keep it short - 90ms - so power users moving between rows do not feel a
 // stutter when reopening a menu on a neighbouring line.
 const enter = keyframes`
   from { opacity: 0; transform: translateY(-4px); }

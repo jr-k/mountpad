@@ -20,7 +20,7 @@ export const FileExplorerRoot = styled.div`
 // Toolbar holds only the explorer's action controls now (details
 // toggle + create file/folder). The current location is reflected by
 // the synthetic "/" root row at the top of the tree, which doubles as
-// a "back to root" affordance — so a separate breadcrumb here would
+// a "back to root" affordance - so a separate breadcrumb here would
 // be pure duplication.
 export const Toolbar = styled.div`
   display: flex;

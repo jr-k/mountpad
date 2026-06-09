@@ -15,7 +15,7 @@ interface MountPointSidebarProps {
 
 const LS_KEY = 'mountpad:mount-sidebar:collapsed'
 
-// Identity helpers — both the glyph (first letter) and the background
+// Identity helpers - both the glyph (first letter) and the background
 // colour are derived once per mount. The colour falls back to the
 // deterministic palette entry from the mount id when no explicit
 // override is set on the row, so every mount looks "owned" without
@@ -90,7 +90,7 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
 
   // Collapsed by default. The state survives reloads via localStorage so
   // the operator only has to set their preference once. Only meaningful
-  // on desktop — the mobile dropdown ignores it.
+  // on desktop - the mobile dropdown ignores it.
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     const stored = window.localStorage.getItem(LS_KEY)
@@ -167,7 +167,7 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
 // in the app) and, on tap, opens a centred Modal listing every mount
 // as a selectable option.
 //
-// Using the shared Modal here — rather than a hand-rolled popover —
+// Using the shared Modal here - rather than a hand-rolled popover -
 // solves three things at once:
 //   - the dialog escapes the drawer's overflow context (Modal portals
 //     to document.body) so it can never be clipped or get a

@@ -31,7 +31,7 @@ const readStoredMode = (): ThemeMode => {
     if (raw === 'light' || raw === 'dark' || raw === 'system') return raw
   } catch {
     // localStorage might be disabled (private mode, etc.); silently fall
-    // back to the default — the toggle still works in-memory.
+    // back to the default - the toggle still works in-memory.
   }
   return 'system'
 }

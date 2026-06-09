@@ -88,9 +88,7 @@ const SetupPage: React.FC = () => {
           <S.Divider />
 
           <S.Lead>
-            This instance has no users yet. Create the first administrator to lock down access:
-            from now on everyone signs in. Lost your credentials? Restart with{' '}
-            <code>MOUNTPAD_SAFE_MODE=true</code> to reset any password.
+            This instance has no users yet. Create the first administrator to lock down access.
           </S.Lead>
 
           <S.Fields>

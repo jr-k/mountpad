@@ -126,7 +126,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
 }) => {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   // Initial value is read from localStorage so the very first render
-  // already reflects the persisted shape — no flash of a collapsed tree
+  // already reflects the persisted shape - no flash of a collapsed tree
   // before an effect "restores" it.
   const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(mountId))
 
@@ -172,7 +172,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     // matching entry in the set BEFORE we apply it. Doing it here
     // (rather than in a separate effect) lets the persist effect
     // pick up the rewritten value on the very next commit and means
-    // we never read the now-stale paths to issue refetches with —
+    // we never read the now-stale paths to issue refetches with -
     // those would 404 on the backend and leave the branch empty.
     if (pendingRename) {
       restored = rewriteExpanded(restored, pendingRename.from, pendingRename.to)
@@ -241,7 +241,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   // When the active path points deep into a sub-tree (typically after a
   // refresh on a deep-linked URL), expand and prefetch every ancestor so
   // the selected entry is reachable in the tree. This effect only ADDS
-  // to the expanded set — it never removes — so a user's deliberate
+  // to the expanded set - it never removes - so a user's deliberate
   // collapse stays in place until they navigate again. The active
   // entry itself is intentionally NOT auto-expanded: that decision is
   // left to the user via the chevron.
@@ -264,7 +264,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, mountId, loadDir])
 
-  // toggle handles ONLY the expand/collapse of a folder branch — it is
+  // toggle handles ONLY the expand/collapse of a folder branch - it is
   // wired exclusively to the disclosure chevron in FileTreeItem. User
   // input always wins here: even the parent of the currently-viewed
   // entry can be collapsed. The tree shape is purely driven by the
@@ -282,7 +282,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   // activate is the row click / Enter / Space handler: it opens the
   // entry. Folders are navigated to (their contents show in
   // DirectoryView) AND auto-expanded so the user immediately sees
-  // their children in the sidebar tree — matches the desktop file
+  // their children in the sidebar tree - matches the desktop file
   // manager convention of "click a folder, see what's inside". Files
   // are opened in the editor.
   //
@@ -298,7 +298,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         next.add(entry.path)
         return next
       })
-      // Lazily fetch the listing if we don't have it yet — same path
+      // Lazily fetch the listing if we don't have it yet - same path
       // the chevron toggle takes when opening a branch for the first
       // time.
       if (!dirs[entry.path]) void loadDir(entry.path)
@@ -311,7 +311,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   // The sidebar tree mirrors the rest of the app: any folder row can
   // act as a drop target for the active drag, including the synthetic
   // "/" root row. Highlighting is driven by `dropTargetPath` so only
-  // the row directly under the cursor lights up — and so a deep drag
+  // the row directly under the cursor lights up - and so a deep drag
   // doesn't trail accent colour through every ancestor.
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
 
@@ -353,14 +353,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     }
     if (state.error) return <ErrorState title="Failed to list" description={state.error} />
     // Show the "empty mount" hint specifically for the root listing,
-    // regardless of indent depth — the synthetic root row pushes the
+    // regardless of indent depth - the synthetic root row pushes the
     // mount's top-level entries to depth 1, so we key off the path
     // instead of the depth here.
     if (state.entries.length === 0 && path === '') {
       return <EmptyState title="Empty mount" description="No files yet. Create one to get started." />
     }
     // Apply the show-hidden filter at render time so we never refetch
-    // when the user flips the pref — same backend response, narrower
+    // when the user flips the pref - same backend response, narrower
     // client-side projection. The "empty mount" hint above
     // intentionally uses the raw list: if the mount truly has only
     // dotfiles in it, we still want to show those once the user
@@ -438,8 +438,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         <Button size="sm" variant="secondary" onClick={onCreateDir}>+ Folder</Button>
       </S.Toolbar>
       <S.List>
-        {/* The synthetic root row sits at depth 0; its children — the
-            actual top-level entries — render one level deeper so the
+        {/* The synthetic root row sits at depth 0; its children - the
+            actual top-level entries - render one level deeper so the
             indentation reads as "inside /". Collapsing the root via
             its chevron hides the whole tree. */}
         <FileTreeItem

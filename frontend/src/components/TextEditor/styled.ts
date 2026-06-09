@@ -10,6 +10,7 @@ export const TextEditorRoot = styled.div`
 TextEditorRoot.displayName = 'TextEditor.Root'
 
 export const EditorWrap = styled.div`
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -26,6 +27,58 @@ export const EditorWrap = styled.div`
   }
 `
 EditorWrap.displayName = 'TextEditor.EditorWrap'
+
+// ReadonlyOverlay is the centered banner that appears on top of the
+// editor when the file is non-editable (currently: symbolic links).
+// It uses pointer-events: none on the wrapper so it doesn't trap the
+// cursor (the editor below stays focusable for selection + copy), and
+// re-enables them only on the Card so the link/dismiss-style chrome
+// is still interactive if we add buttons later.
+export const ReadonlyOverlay = styled.div`
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: ${({ theme }) => theme.space[6]};
+  pointer-events: none;
+  background: ${({ theme }) =>
+    `color-mix(in srgb, ${theme.color.bg} 70%, transparent)`};
+  backdrop-filter: blur(2px);
+  z-index: 5;
+`
+ReadonlyOverlay.displayName = 'TextEditor.ReadonlyOverlay'
+
+export const ReadonlyCard = styled.div`
+  pointer-events: auto;
+  max-width: 480px;
+  padding: ${({ theme }) => `${theme.space[5]} ${theme.space[6]}`};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: ${({ theme }) => theme.color.bgPanel};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  box-shadow: ${({ theme }) => theme.shadow.lg};
+  text-align: center;
+  color: ${({ theme }) => theme.color.text};
+  display: flex;
+  flex-direction: column;
+  gap: ${({ theme }) => theme.space[2]};
+`
+ReadonlyCard.displayName = 'TextEditor.ReadonlyCard'
+
+export const ReadonlyTitle = styled.h3`
+  margin: 0;
+  font-size: ${({ theme }) => theme.font.size.lg};
+  font-weight: 600;
+`
+ReadonlyTitle.displayName = 'TextEditor.ReadonlyTitle'
+
+export const ReadonlyBody = styled.p`
+  margin: 0;
+  font-size: ${({ theme }) => theme.font.size.sm};
+  line-height: 1.5;
+  color: ${({ theme }) => theme.color.textMuted};
+`
+ReadonlyBody.displayName = 'TextEditor.ReadonlyBody'
 
 export const StatusBar = styled.div`
   display: flex;

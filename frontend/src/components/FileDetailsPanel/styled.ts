@@ -36,7 +36,7 @@ export const FileDetailsPanelRoot = styled.aside`
 // *left* edge of the panel since the details pane lives on the right
 // side of the workspace. Same 6px hit area, same hover/active accent,
 // same desktop-only display rule (the mobile drawer has no need for
-// a resize affordance — it slides over the editor at a fixed width).
+// a resize affordance - it slides over the editor at a fixed width).
 export const DetailsResizer = styled.div<{ $resizing?: boolean }>`
   position: absolute;
   top: 0;

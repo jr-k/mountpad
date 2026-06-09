@@ -38,7 +38,7 @@ interface UseHorizontalResizeReturn {
  * resizable panes (file explorer on the left, file details on the
  * right). The hook uses `setPointerCapture` so move/up events keep
  * flowing to the handle even if the cursor crosses out of it during
- * the drag — no global window listeners needed, no lost mouseup.
+ * the drag - no global window listeners needed, no lost mouseup.
  *
  * A double-click on the handle resets to `initial`, matching the
  * VS Code convention. The new width persists synchronously on every
@@ -68,7 +68,7 @@ export function useHorizontalResize(opts: UseHorizontalResizeOptions): UseHorizo
   }, [storageKey, width])
 
   // While dragging we want the resize cursor (and a frozen selection)
-  // across the entire document — otherwise the cursor flickers back
+  // across the entire document - otherwise the cursor flickers back
   // to the default whenever it strays off the 6px handle, and text
   // inside the editor would highlight as the user drags through it.
   useEffect(() => {

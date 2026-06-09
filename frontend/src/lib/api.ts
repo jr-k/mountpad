@@ -33,6 +33,16 @@ export const api = {
 export const fsApi = (mountId: string | number) => ({
   list:       (path: string)                      => api.get<import('@/types/files').ListResponse>(`/api/fs/${mountId}/list?path=${encodeURIComponent(path)}`),
   read:       (path: string)                      => api.get<import('@/types/files').ReadResponse>(`/api/fs/${mountId}/read?path=${encodeURIComponent(path)}`),
+  // downloadUrl returns the absolute browser-navigable URL for one
+  // or more paths under this mount. The backend streams a single
+  // file directly OR a zip when more than one path is supplied (or
+  // when the only path is a directory). Using a URL instead of a
+  // fetch+blob lets the browser's native download UI (progress bar,
+  // pause/resume) take over for large files.
+  downloadUrl: (paths: string[]): string => {
+    const q = paths.map((p) => `path=${encodeURIComponent(p)}`).join('&')
+    return `/api/fs/${mountId}/download?${q}`
+  },
   write:      (body: { path: string; content: string; expected_checksum?: string; expected_mtime?: string }) =>
                                                      api.put(`/api/fs/${mountId}/write`, body),
   createFile: (body: { path: string; content?: string }) => api.post(`/api/fs/${mountId}/file`, body),

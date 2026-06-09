@@ -81,7 +81,7 @@ var ErrDenied = errors.New("permission denied")
 
 // EffectiveBits computes the visible permission bits for the requesting user
 // against a {owner, group, mode} tuple, projecting them into the User triplet
-// (bits 6..8) so HasRead/HasWrite/HasExec — which only inspect User bits —
+// (bits 6..8) so HasRead/HasWrite/HasExec - which only inspect User bits -
 // give the right answer regardless of which class (owner/group/others)
 // actually granted the permission.
 //

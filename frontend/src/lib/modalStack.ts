@@ -10,7 +10,7 @@
 // work correctly: pushing twice and popping once keeps the gate on
 // until the outer modal closes as well.
 //
-// No React context on purpose — every consumer only needs a one-shot
+// No React context on purpose - every consumer only needs a one-shot
 // read at the moment a key fires, not a re-render when the value
 // changes. Keeping it out of React also avoids ordering issues
 // between the modal's mount effect and the listener's mount effect.
