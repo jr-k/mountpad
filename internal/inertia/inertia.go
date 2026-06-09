@@ -1,6 +1,7 @@
 package inertia
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -22,12 +23,20 @@ import (
 func New(cfg *config.Config, sessions *auth.SessionManager, mounts *repositories.MountPointsRepo) (*gonertia.Inertia, error) {
 	rootHTML := filepath.Join(cfg.FrontendDistDir, "index.html")
 	if _, err := os.Stat(rootHTML); err != nil {
-		// In dev we still need a template; Vite serves the real one, but
-		// gonertia requires a root layout. Fall back to a minimal stub.
-		rootHTML = filepath.Join(cfg.FrontendDistDir, ".gonertia.html")
-		if err := os.MkdirAll(cfg.FrontendDistDir, 0o755); err == nil {
-			_ = os.WriteFile(rootHTML, []byte(fallbackTemplate(cfg)), 0o644)
+		// No prebuilt index.html on disk - this is the normal case
+		// in both dev (Vite hot-reload) and prod (Vite is configured
+		// to emit only the JS/CSS bundle, the backend renders the
+		// page shell via this template). Write the fallback into
+		// the OS temp dir rather than FrontendDistDir: the prod
+		// container has /app/frontend/dist owned by root after the
+		// Dockerfile COPY, so the unprivileged runtime user can't
+		// create files there. /tmp is always writable, the file is
+		// ephemeral, and gonertia only needs to read it at boot.
+		tmpRoot := filepath.Join(os.TempDir(), "mountpad-gonertia.html")
+		if err := os.WriteFile(tmpRoot, []byte(fallbackTemplate(cfg)), 0o644); err != nil {
+			return nil, fmt.Errorf("write fallback template: %w", err)
 		}
+		rootHTML = tmpRoot
 	}
 
 	opts := []gonertia.Option{}
@@ -35,8 +44,29 @@ func New(cfg *config.Config, sessions *auth.SessionManager, mounts *repositories
 	// (i.e. a production build is present). In dev, Vite serves modules at
 	// runtime and no manifest is emitted, so we skip versioning.
 	manifestPath := filepath.Join(cfg.FrontendDistDir, ".vite", "manifest.json")
+	entryJS, entryCSS := "/assets/index.js", ""
 	if _, err := os.Stat(manifestPath); err == nil {
 		opts = append(opts, gonertia.WithVersionFromFile(manifestPath))
+		// Read the manifest to discover the actual entry artefacts
+		// for the prod template. JS is always emitted; CSS only when
+		// the entry imports a stylesheet (the current bundle ships
+		// styled-components only, so no CSS file is produced).
+		if raw, err := os.ReadFile(manifestPath); err == nil {
+			var m map[string]struct {
+				File string   `json:"file"`
+				CSS  []string `json:"css"`
+			}
+			if json.Unmarshal(raw, &m) == nil {
+				if entry, ok := m["src/main.tsx"]; ok {
+					if entry.File != "" {
+						entryJS = "/" + entry.File
+					}
+					if len(entry.CSS) > 0 {
+						entryCSS = "/" + entry.CSS[0]
+					}
+				}
+			}
+		}
 	}
 
 	i, err := gonertia.NewFromFile(rootHTML, opts...)
@@ -47,6 +77,8 @@ func New(cfg *config.Config, sessions *auth.SessionManager, mounts *repositories
 	i.ShareTemplateData("frontendDevURL", cfg.FrontendDevURL)
 	i.ShareTemplateData("useViteDev", cfg.UseViteDev)
 	i.ShareTemplateData("appName", cfg.AppName)
+	i.ShareTemplateData("entryJS", entryJS)
+	i.ShareTemplateData("entryCSS", entryCSS)
 
 	// `app` is a static shared prop (neither the app name nor the
 	// build version change at runtime), so we don't recompute it
@@ -180,8 +212,8 @@ window.__vite_plugin_react_preamble_installed__ = true
 <script type="module" src="{{ .frontendDevURL }}/@vite/client"></script>
 <script type="module" src="{{ .frontendDevURL }}/src/main.tsx"></script>
 {{ else }}
-<link rel="stylesheet" href="/assets/index.css" />
-<script type="module" src="/assets/index.js"></script>
+{{ if .entryCSS }}<link rel="stylesheet" href="{{ .entryCSS }}" />{{ end }}
+<script type="module" src="{{ .entryJS }}"></script>
 {{ end }}
 </head>
 <body>{{ .inertia }}</body>
