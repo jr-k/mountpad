@@ -24,5 +24,11 @@ frontend/src/**/*.d.ts.map
 examples/storage/
 !examples/.gitkeep
 
+# Host bind-mount roots created by `docker compose up` at the repo
+# root. Keep them ignored so a fresh checkout never carries stale
+# DB files or user mount content from the previous developer.
+data/
+storage/
+
 .DS_Store
 *.log

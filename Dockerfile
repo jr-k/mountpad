@@ -40,8 +40,8 @@ CMD ["air", "-c", ".air.toml"]
 FROM alpine:3.20 AS prod
 RUN apk add --no-cache ca-certificates tzdata \
  && addgroup -S mountpad && adduser -S -G mountpad -u 10001 mountpad \
- && mkdir -p /app /storage \
- && chown -R mountpad:mountpad /app /storage
+ && mkdir -p /app /storage /data \
+ && chown -R mountpad:mountpad /app /storage /data
 WORKDIR /app
 # --chown on every COPY so the unprivileged runtime user owns the
 # files end-to-end. Without it, COPY plants root-owned files even
