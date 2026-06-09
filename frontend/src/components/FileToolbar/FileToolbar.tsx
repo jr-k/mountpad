@@ -25,13 +25,24 @@ interface FileToolbarProps {
   onDelete: () => void
   onPermissions: () => void
   /**
-   * Whether a contextual target exists for Rename/Delete (i.e. the user
-   * selected an entry in DirectoryView, or is editing a file). When
-   * false, the two buttons are hidden entirely — renaming the current
-   * folder still has a dedicated pencil affordance on the breadcrumb
-   * leaf (see `onRenameLeaf`).
+   * Rename only makes sense against a single subject, so the parent
+   * passes `true` only when there is exactly one entry selected (or a
+   * file is open in the editor). With nothing or many selected, the
+   * Rename button stays hidden.
    */
-  canModify?: boolean
+  canRename?: boolean
+  /**
+   * Delete supports both single and bulk subjects. The button label
+   * adapts via `deleteCount` below.
+   */
+  canDelete?: boolean
+  /**
+   * Number of entries the next Delete press would act on. When > 1,
+   * the button surfaces the count ("Delete 5 items") so the user knows
+   * the action is a bulk operation before they trigger the confirmation
+   * dialog. Defaults to 1; ignored when canDelete is false.
+   */
+  deleteCount?: number
   /**
    * Optional handler for the breadcrumb-leaf pencil: rename the current
    * folder (the leaf path). When omitted (or when the leaf is a file
@@ -67,7 +78,7 @@ const PanelIcon: React.FC<{ $active?: boolean }> = ({ $active }) => (
 export const FileToolbar: React.FC<FileToolbarProps> = ({
   filePath, isFile, mountName, onNavigateFolder,
   status, statusLabel, canSave, onSave, onRename, onDelete, onPermissions,
-  canModify = false, onRenameLeaf,
+  canRename = false, canDelete = false, deleteCount = 1, onRenameLeaf,
   showDetails, onToggleDetails,
 }) => (
   <S.FileToolbarRoot>
@@ -88,15 +99,18 @@ export const FileToolbar: React.FC<FileToolbarProps> = ({
     </S.Title>
     {statusLabel && <S.Status $tone={status}>{statusLabel}</S.Status>}
     <Button size="sm" variant="ghost" onClick={onPermissions} disabled={!filePath}>Permissions</Button>
-    {/* Rename and Delete are contextual: they only render when there is
-        a real target (a selected entry in the directory view, or the
-        file currently being edited). With nothing selected the user
-        renames the current folder via the breadcrumb pencil instead. */}
-    {canModify && (
-      <>
-        <Button size="sm" variant="secondary" onClick={onRename}>Rename</Button>
-        <Button size="sm" variant="danger" onClick={onDelete}>Delete</Button>
-      </>
+    {/* Rename is single-target only; Delete is contextual on the
+        actual count so multi-select lights up "Delete N items" without
+        re-enabling Rename for an action that doesn't make sense in
+        bulk. With nothing selected at all the user renames the current
+        folder via the breadcrumb pencil instead. */}
+    {canRename && (
+      <Button size="sm" variant="secondary" onClick={onRename}>Rename</Button>
+    )}
+    {canDelete && (
+      <Button size="sm" variant="danger" onClick={onDelete}>
+        {deleteCount > 1 ? `Delete ${deleteCount} items` : 'Delete'}
+      </Button>
     )}
     {/* Save only appears when there is something to save. Showing it
         disabled the rest of the time turns the toolbar's primary action

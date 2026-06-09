@@ -42,14 +42,20 @@ export const HeaderMeta = styled.span`
   line-height: 1;
 `
 
-// HeaderActions hosts the list/grid toggle. We push it to the right with
-// `margin-left: auto` so it always sits on the trailing edge of the
-// header, regardless of what (if anything) precedes it. It collapses
-// gracefully when no actions are rendered.
+// HeaderActions hosts the three logical control groups along the
+// trailing edge of the header: Sort (button + order toggle), Columns
+// dropdown, and the list/grid ViewToggle. We push the whole cluster
+// to the right with `margin-left: auto` so it always sits on that
+// edge, regardless of what precedes it. `gap: space[3]` separates
+// the three groups laterally — without it the borders touch and the
+// reader can't tell where one control ends and the next begins.
+// (Within each group the buttons still share their own tighter spacing
+// — e.g. Sort + Asc use HeaderButtonGroup's 4px gap.)
 export const HeaderActions = styled.div`
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  gap: ${({ theme }) => theme.space[3]};
 `
 
 export const ViewToggle = styled.div`
@@ -60,6 +66,99 @@ export const ViewToggle = styled.div`
   border: 1px solid ${({ theme }) => theme.color.border};
   border-radius: ${({ theme }) => theme.radius.md};
   background: ${({ theme }) => theme.color.bgElev};
+`
+
+// HeaderButton is the shared visual primitive for the sort, columns
+// and order controls. It mirrors the small <Button> variant used in
+// other toolbars (height, radius, padding) so the header reads as a
+// uniform action row. `$wide` gives the labelled buttons (Sort,
+// Columns) a sensible minimum width; the icon-only order toggle
+// stays square.
+export const HeaderButton = styled.button<{ $active?: boolean; $wide?: boolean }>`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: ${({ $wide }) => ($wide ? '0 10px' : '0')};
+  width: ${({ $wide }) => ($wide ? 'auto' : '28px')};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  color: ${({ $active, theme }) => ($active ? theme.color.text : theme.color.textMuted)};
+  background: ${({ $active, theme }) => ($active ? theme.color.bgPanel : 'transparent')};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  &:hover { color: ${({ theme }) => theme.color.text}; border-color: ${({ theme }) => theme.color.borderStrong}; }
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.color.accent};
+    outline-offset: 1px;
+  }
+  svg { display: block; }
+`
+
+// HeaderButtonGroup glues the sort dropdown and the order toggle into
+// a single visual pill: shared border colour, no gap between them.
+// `position: relative` anchors the sort popover under the dropdown.
+export const HeaderButtonGroup = styled.div`
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+`
+
+// MenuPopover floats just below its anchoring trigger; we right-align
+// to the trigger's edge so it grows leftwards and never overflows the
+// header on a narrow viewport. z-index sits above the table sticky
+// thead but below modals.
+export const MenuPopover = styled.div`
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  padding: 4px;
+  background: ${({ theme }) => theme.color.bgPanel};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  box-shadow: ${({ theme }) => theme.shadow.md};
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+`
+
+// MenuItem renders a clickable row inside MenuPopover. Active state is
+// used by the sort menu to mark the current selection with a check.
+export const MenuItem = styled.button<{ $active?: boolean }>`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  width: 100%;
+  border: 0;
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : 'transparent')};
+  color: ${({ theme }) => theme.color.text};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  cursor: pointer;
+  text-align: left;
+  &:hover { background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : theme.color.bgElev)}; }
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.color.accent};
+    outline-offset: -2px;
+  }
+`
+
+// MenuCheck is the leading 14px slot in a MenuItem reserved for the
+// active checkmark / column checkbox glyph. We always reserve the
+// slot so labels stay aligned whether the row is active or not.
+export const MenuCheck = styled.span`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+  color: ${({ theme }) => theme.color.accent};
 `
 
 export const ViewToggleButton = styled.button<{ $active?: boolean }>`
@@ -162,10 +261,33 @@ export const Table = styled.table`
 // text — without it the activation gesture would smear a text selection
 // across the cells before opening the entry, which feels broken even
 // though the click handler still fires.
-export const Row = styled.tr<{ $active?: boolean }>`
+//
+// $dragging: applied to the source rows while a drag is in progress.
+// We dim them in place (instead of removing them from the layout) so
+// the user sees a "hole" where the items used to sit — matches the
+// Windows Explorer convention of "the file is being moved out of here".
+//
+// $dropTarget: applied to a folder row when the active drag could
+// land on it. Drawing a strong inset ring is more reliable than a
+// border-color change at small row heights — it doesn't shift the
+// row by 1px or clash with the active-selection background.
+export const Row = styled.tr<{ $active?: boolean; $dragging?: boolean; $dropTarget?: boolean }>`
   cursor: pointer;
   user-select: none;
+  opacity: ${({ $dragging }) => ($dragging ? 0.4 : 1)};
   background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : 'transparent')};
+  /* Even-row striping: a subtle alternating tint helps the eye track
+     a single row across many narrow columns (owner / group / size /
+     mtime). $active still wins so a highlighted row reads identically
+     whether it lands on an odd or even slot. nth-of-type counts from
+     the first <tr> in the <tbody>, so the synthetic ".." row gets the
+     odd (untinted) slot and real entries naturally alternate from
+     there. */
+  &:nth-of-type(even) {
+    background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : theme.color.bgSubtle)};
+  }
+  box-shadow: ${({ $dropTarget, theme }) =>
+    $dropTarget ? `inset 0 0 0 2px ${theme.color.accent}` : 'none'};
   &:hover {
     background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : theme.color.bgElev)};
   }
@@ -217,7 +339,14 @@ export const Grid = styled.div`
 // neighbours taller. The whole rectangle is clickable (it is the
 // button), giving each item the "invisible bounding box" required for
 // consistent marquee collision.
-export const Tile = styled.button<{ $active?: boolean }>`
+// $dragging / $dropTarget mirror the table-Row's behaviour: dim the
+// source tiles in place during a drag, ring the drop target with an
+// accent-coloured border so the user knows where the release would
+// land. The border slot is already used for $active highlighting; we
+// upgrade it to a thicker accent ring for $dropTarget without growing
+// the tile box (still 1px reserved, the second pixel comes from
+// outline so it doesn't push neighbours).
+export const Tile = styled.button<{ $active?: boolean; $dragging?: boolean; $dropTarget?: boolean }>`
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -225,21 +354,25 @@ export const Tile = styled.button<{ $active?: boolean }>`
   gap: 6px;
   min-height: 132px;
   padding: ${({ theme }) => `${theme.space[3]} ${theme.space[2]}`};
-  border: 1px solid ${({ $active, theme }) =>
-    $active ? theme.color.accent : 'transparent'};
+  border: 1px solid ${({ $active, $dropTarget, theme }) =>
+    $dropTarget ? theme.color.accent : $active ? theme.color.accent : 'transparent'};
   border-radius: ${({ theme }) => theme.radius.md};
-  background: ${({ $active, theme }) =>
-    $active ? theme.color.accentMuted : 'transparent'};
+  background: ${({ $active, $dropTarget, theme }) =>
+    $dropTarget ? theme.color.accentMuted : $active ? theme.color.accentMuted : 'transparent'};
   color: ${({ theme }) => theme.color.text};
   cursor: pointer;
   user-select: none;
   text-align: center;
   min-width: 0;
+  opacity: ${({ $dragging }) => ($dragging ? 0.4 : 1)};
+  outline: ${({ $dropTarget, theme }) =>
+    $dropTarget ? `1px solid ${theme.color.accent}` : 'none'};
+  outline-offset: -2px;
   transition: background 120ms ease, border-color 120ms ease;
 
   &:hover {
-    background: ${({ $active, theme }) =>
-      $active ? theme.color.accentMuted : theme.color.bgElev};
+    background: ${({ $active, $dropTarget, theme }) =>
+      $dropTarget ? theme.color.accentMuted : $active ? theme.color.accentMuted : theme.color.bgElev};
   }
   &:focus-visible {
     outline: 2px solid ${({ theme }) => theme.color.accent};
@@ -289,4 +422,61 @@ export const EmptyTile = styled.div`
   text-align: center;
   color: ${({ theme }) => theme.color.textFaint};
   font-size: ${({ theme }) => theme.font.size.sm};
+`
+
+// DragGhost is the floating preview rendered next to the cursor while
+// the user drags one (or many) entries. It lives permanently in the
+// DOM at off-screen coordinates so we can mutate its content from
+// onDragStart and immediately feed it to dataTransfer.setDragImage —
+// the browser snapshots the node at that moment and detaches it from
+// our DOM for the rest of the drag.
+//
+// position: fixed + top:-10000px keeps it invisible to the user but
+// laid out (setDragImage requires a rendered, non-display:none node
+// to take a usable snapshot in every browser).
+export const DragGhost = styled.div`
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  max-width: 320px;
+  padding: 6px 10px;
+  border: 1px solid ${({ theme }) => theme.color.borderStrong};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ theme }) => theme.color.bgPanel};
+  color: ${({ theme }) => theme.color.text};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  font-family: ${({ theme }) => theme.font.family};
+  box-shadow: ${({ theme }) => theme.shadow.md};
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+`
+
+// GhostIcon mirrors the file-icon glyph style used by the rows/tiles
+// so the preview reads as "one of those things you just grabbed".
+export const GhostIcon = styled.span`
+  font-size: 16px;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Twemoji Mozilla",
+    sans-serif;
+`
+
+// GhostBadge is the "+ N" pill rendered for a multi-selection drag.
+// Keeps the count visible without truncating the leading filename.
+export const GhostBadge = styled.span`
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: ${({ theme }) => theme.color.accent};
+  color: ${({ theme }) => theme.color.bgPanel};
+  font-size: ${({ theme }) => theme.font.size.xs};
+  font-weight: 600;
+  line-height: 1.4;
 `

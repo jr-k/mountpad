@@ -13,14 +13,17 @@ type MountPointsRepo struct{ DB *db.DB }
 
 func NewMountPointsRepo(d *db.DB) *MountPointsRepo { return &MountPointsRepo{DB: d} }
 
-const mpCols = "id, slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, created_at, updated_at"
+// Keep this column list synchronised with `scanMP`. The avatar_color
+// column was added in migration 0003 and defaults to '' server-side
+// so old rows scan cleanly.
+const mpCols = "id, slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, created_at, updated_at"
 
 func scanMP(row interface{ Scan(...any) error }) (*models.MountPoint, error) {
 	var m models.MountPoint
 	var ownerID, groupID sql.NullInt64
 	var mode int64
 	if err := row.Scan(&m.ID, &m.Slug, &m.Name, &m.Description, &m.HostPath, &m.IsActive,
-		&ownerID, &groupID, &mode, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&ownerID, &groupID, &mode, &m.AvatarColor, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if ownerID.Valid {
@@ -89,15 +92,15 @@ func (r *MountPointsRepo) GetBySlug(ctx context.Context, slug string) (*models.M
 
 func (r *MountPointsRepo) Create(ctx context.Context, m *models.MountPoint) error {
 	q := r.DB.Placeholder(`INSERT INTO mount_points
-		(slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		(slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if r.DB.Driver == "postgres" {
 		q += " RETURNING id"
 		return r.DB.QueryRowContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-			m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode)).Scan(&m.ID)
+			m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor).Scan(&m.ID)
 	}
 	res, err := r.DB.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode))
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor)
 	if err != nil {
 		return err
 	}
@@ -110,9 +113,10 @@ func (r *MountPointsRepo) Update(ctx context.Context, m *models.MountPoint) erro
 	q := r.DB.Placeholder(`UPDATE mount_points SET
 		slug = ?, name = ?, description = ?, host_path = ?, is_active = ?,
 		default_owner_id = ?, default_group_id = ?, default_mode = ?,
+		avatar_color = ?,
 		updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
 	_, err := r.DB.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.ID)
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.ID)
 	return err
 }
 

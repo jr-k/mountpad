@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 
+import { isAnyModalOpen } from '@/lib/modalStack'
+
 interface Options {
   /** When false, the listener is detached entirely (no preventDefault either). */
   enabled?: boolean
@@ -14,6 +16,11 @@ interface Options {
  *
  * The listener is attached to `window` in the capture phase so it fires even
  * when focus is inside a `<textarea>` (the text editor) or any input.
+ *
+ * While a Modal is open, we still swallow the keystroke (otherwise the
+ * browser's "save page" dialog would pop up inside a rename input) but
+ * skip the `onSave` call — a confirmation dialog shouldn't trigger a
+ * background save on the file underneath.
  */
 export function useSaveShortcut(onSave: () => void, { enabled = true }: Options = {}): void {
   useEffect(() => {
@@ -29,6 +36,7 @@ export function useSaveShortcut(onSave: () => void, { enabled = true }: Options 
 
       e.preventDefault()
       e.stopPropagation()
+      if (isAnyModalOpen()) return
       onSave()
     }
 

@@ -64,44 +64,6 @@ FullRow.displayName = 'ProfilePage.FullRow'
 // The colour picker is a horizontal swatch row. Each swatch shows the
 // hue and, when active, gains a contrasting ring so the selection is
 // obvious without relying on copy alone.
-export const Swatches = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: ${({ theme }) => theme.space[2]};
-  padding: ${({ theme }) => `${theme.space[2]} 0`};
-`
-Swatches.displayName = 'ProfilePage.Swatches'
-
-export const Swatch = styled.button<{ $color: string; $active?: boolean }>`
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  background: ${({ $color }) => $color};
-  outline: 2px solid ${({ $active, theme }) => ($active ? theme.color.accent : 'transparent')};
-  outline-offset: 2px;
-  transition: transform 120ms ease;
-  &:hover { transform: scale(1.08); }
-`
-Swatch.displayName = 'ProfilePage.Swatch'
-
-// The "auto" swatch represents the deterministic palette fallback. We draw
-// a diagonal stripe so it's visually distinct from the explicit colour
-// chips next to it.
-export const SwatchAuto = styled(Swatch)`
-  background:
-    repeating-linear-gradient(
-      135deg,
-      ${({ theme }) => theme.color.bgElev} 0,
-      ${({ theme }) => theme.color.bgElev} 6px,
-      ${({ theme }) => theme.color.border} 6px,
-      ${({ theme }) => theme.color.border} 12px
-    );
-`
-SwatchAuto.displayName = 'ProfilePage.SwatchAuto'
-
 // Actions is the submit bar at the bottom of the profile page. It sits as
 // a direct child of SettingsPageRoot (not inside a Section), so we draw it
 // as a self-contained card: same border colour, same radius, and the same

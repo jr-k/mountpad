@@ -5,23 +5,35 @@ import styled from 'styled-components'
 // to be its own button — nesting a <button> inside another <button> is
 // invalid HTML and confuses screen readers. Keyboard focus is preserved
 // via tabIndex + role on the consumer side.
-export const FileTreeItemRow = styled.div<{ $depth: number; $active?: boolean }>`
+export const FileTreeItemRow = styled.div<{
+  $depth: number
+  $active?: boolean
+  $dropTarget?: boolean
+}>`
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   padding: 5px 8px 5px ${({ $depth }) => 4 + $depth * 16}px;
-  background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : 'transparent')};
+  background: ${({ $active, $dropTarget, theme }) =>
+    $dropTarget ? theme.color.accentMuted
+      : $active ? theme.color.accentMuted
+        : 'transparent'};
   color: ${({ theme }) => theme.color.text};
   text-align: left;
   font-size: ${({ theme }) => theme.font.size.sm};
   border-radius: ${({ theme }) => theme.radius.sm};
   cursor: pointer;
+  box-shadow: ${({ $dropTarget, theme }) =>
+    $dropTarget ? `inset 0 0 0 1px ${theme.color.accent}` : 'none'};
   /* Prevent the second click of a double-click from selecting the entry
      name as plain text — that would feel jarring in a file-manager UX,
      where double-click means "open". */
   user-select: none;
-  &:hover { background: ${({ $active, theme }) => ($active ? theme.color.accentMuted : theme.color.bgElev)}; }
+  &:hover { background: ${({ $active, $dropTarget, theme }) =>
+    $dropTarget ? theme.color.accentMuted
+      : $active ? theme.color.accentMuted
+        : theme.color.bgElev}; }
   &:focus-visible {
     outline: 2px solid ${({ theme }) => theme.color.accent};
     outline-offset: -2px;

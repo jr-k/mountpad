@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { fsApi, HttpError, api } from '@/lib/api'
 import type { FileEntry } from '@/types/files'
 import { FileTreeItem } from '@/components/FileTreeItem'
@@ -6,6 +6,8 @@ import { Button } from '@/components/Button'
 import { LoadingState } from '@/components/LoadingState'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
+import { MOVE_MIME, isValidDropTarget, performDropMove } from '@/lib/dnd'
+import { useShowHidden, isHiddenEntry } from '@/hooks/useShowHidden'
 
 import * as S from './styled'
 
@@ -58,6 +60,39 @@ interface FileExplorerProps {
    * was bypassed (e.g. stale Inertia visit cached on the client).
    */
   onRootForbidden?: (mountId: number) => void
+  /**
+   * Fired after a successful drag-and-drop move into a sidebar folder.
+   * The parent bumps its shared refresh key so both this explorer AND
+   * the workspace's DirectoryView re-fetch and reflect the new layout.
+   */
+  onAfterMutation?: () => void
+  /**
+   * Rewriting hint sent by the parent after a rename succeeds. Any
+   * path in the `expanded` set that equals `from` or sits under it is
+   * rewritten with the new prefix, so the user keeps their unfolded
+   * branches across the rename instead of seeing the whole subtree
+   * snap shut. Cleared via `onPendingRenameConsumed` once applied.
+   */
+  pendingRename?: { from: string; to: string } | null
+  onPendingRenameConsumed?: () => void
+}
+
+// rewriteExpanded returns a new Set with every path inside `from`
+// rebased onto `to`. Used both for a direct rename of `from` itself
+// and for transitive rewrites of descendants (e.g. renaming `notes`
+// also updates `notes/2026/january` → `archive/2026/january`).
+// The empty source guard prevents accidentally matching every path
+// at the mount root when `from` happens to be "".
+function rewriteExpanded(set: Set<string>, from: string, to: string): Set<string> {
+  if (!from || from === to) return set
+  let changed = false
+  const next = new Set<string>()
+  for (const p of set) {
+    if (p === from) { next.add(to); changed = true }
+    else if (p.startsWith(from + '/')) { next.add(to + p.slice(from.length)); changed = true }
+    else next.add(p)
+  }
+  return changed ? next : set
 }
 
 interface DirState {
@@ -87,7 +122,7 @@ function ancestorsOf(path: string): string[] {
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   mountId, activePath, onOpenFile, onChangeDir, onCreateFile, onCreateDir, refreshKey,
-  onRootForbidden,
+  onRootForbidden, onAfterMutation, pendingRename, onPendingRenameConsumed,
 }) => {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   // Initial value is read from localStorage so the very first render
@@ -105,6 +140,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   const [userById, setUserById] = useState<Record<number, string>>({})
   const [groupById, setGroupById] = useState<Record<number, string>>({})
   const [directoryLoaded, setDirectoryLoaded] = useState(false)
+
+  // App-wide "show hidden files" preference, shared with DirectoryView
+  // via a module-level pub/sub (see hooks/useShowHidden). The toggle
+  // lives in the DirectoryView header; we just consume the value here
+  // and re-filter on every change so the sidebar stays in lockstep.
+  const { showHidden } = useShowHidden()
 
   const loadDir = useCallback(async (path: string) => {
     setDirs((prev) => ({ ...prev, [path]: { loading: true, entries: prev[path]?.entries || [] } }))
@@ -126,13 +167,28 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     // Restore the per-mount expanded set from localStorage on every
     // mount change or refresh, then eagerly fetch each persisted folder
     // so the tree branches come back populated instead of empty.
-    const restored = readExpanded(mountId)
+    let restored = readExpanded(mountId)
+    // If the parent reports a path was just renamed, rebase every
+    // matching entry in the set BEFORE we apply it. Doing it here
+    // (rather than in a separate effect) lets the persist effect
+    // pick up the rewritten value on the very next commit and means
+    // we never read the now-stale paths to issue refetches with —
+    // those would 404 on the backend and leave the branch empty.
+    if (pendingRename) {
+      restored = rewriteExpanded(restored, pendingRename.from, pendingRename.to)
+    }
     setExpanded(restored)
     void loadDir('')
     for (const p of restored) {
       if (p === '') continue
       void loadDir(p)
     }
+    if (pendingRename) onPendingRenameConsumed?.()
+    // pendingRename / onPendingRenameConsumed are intentionally NOT in
+    // the dep array: the parent always pairs a rename hint with a
+    // refreshKey bump, and re-running this effect on the consumed
+    // callback's re-render would just re-fetch the same listings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mountId, loadDir, refreshKey])
 
   // Persist the expanded set after every change. We strip the root entry
@@ -225,13 +281,68 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
 
   // activate is the row click / Enter / Space handler: it opens the
   // entry. Folders are navigated to (their contents show in
-  // DirectoryView), files are opened in the editor. Single-click is
-  // the natural interaction for a navigation tree — the dual-click
-  // (select-then-open) pattern is reserved for DirectoryView, which
-  // behaves like a desktop file manager's main pane.
+  // DirectoryView) AND auto-expanded so the user immediately sees
+  // their children in the sidebar tree — matches the desktop file
+  // manager convention of "click a folder, see what's inside". Files
+  // are opened in the editor.
+  //
+  // The expand is one-directional: clicking an already-open folder
+  // leaves it open (the chevron is still the only way to collapse).
+  // This avoids the surprise of a click both navigating into a folder
+  // and hiding the children the user just landed on.
   const activate = (entry: FileEntry) => {
+    if (entry.is_dir) {
+      setExpanded((prev) => {
+        if (prev.has(entry.path)) return prev
+        const next = new Set(prev)
+        next.add(entry.path)
+        return next
+      })
+      // Lazily fetch the listing if we don't have it yet — same path
+      // the chevron toggle takes when opening a branch for the first
+      // time.
+      if (!dirs[entry.path]) void loadDir(entry.path)
+    }
     onChangeDir(entry.path)
     onOpenFile(entry)
+  }
+
+  // ── Drag-and-drop drop targets ──────────────────────────────────────
+  // The sidebar tree mirrors the rest of the app: any folder row can
+  // act as a drop target for the active drag, including the synthetic
+  // "/" root row. Highlighting is driven by `dropTargetPath` so only
+  // the row directly under the cursor lights up — and so a deep drag
+  // doesn't trail accent colour through every ancestor.
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+
+  const folderDragOver = (folderPath: string) => (ev: React.DragEvent) => {
+    if (!ev.dataTransfer.types.includes(MOVE_MIME)) return
+    if (!isValidDropTarget(mountId, folderPath)) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    ev.dataTransfer.dropEffect = 'move'
+    setDropTargetPath(folderPath)
+  }
+  const folderDragLeave = (folderPath: string) => () => {
+    setDropTargetPath((cur) => (cur === folderPath ? null : cur))
+  }
+  const folderDrop = (folderPath: string) => async (ev: React.DragEvent) => {
+    if (!ev.dataTransfer.types.includes(MOVE_MIME)) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    setDropTargetPath(null)
+    const { attempted, failed } = await performDropMove(mountId, folderPath)
+    if (attempted > 0 && failed < attempted) {
+      // Pre-expand the destination so the user sees the moved entries
+      // appear in their new home as soon as the refresh lands.
+      setExpanded((prev) => {
+        if (prev.has(folderPath)) return prev
+        const next = new Set(prev)
+        next.add(folderPath)
+        return next
+      })
+      onAfterMutation?.()
+    }
   }
 
   const renderDir = (path: string, depth: number): React.ReactNode => {
@@ -241,12 +352,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       return <LoadingState label="Loading…" />
     }
     if (state.error) return <ErrorState title="Failed to list" description={state.error} />
-    if (state.entries.length === 0 && depth === 0) {
+    // Show the "empty mount" hint specifically for the root listing,
+    // regardless of indent depth — the synthetic root row pushes the
+    // mount's top-level entries to depth 1, so we key off the path
+    // instead of the depth here.
+    if (state.entries.length === 0 && path === '') {
       return <EmptyState title="Empty mount" description="No files yet. Create one to get started." />
     }
+    // Apply the show-hidden filter at render time so we never refetch
+    // when the user flips the pref — same backend response, narrower
+    // client-side projection. The "empty mount" hint above
+    // intentionally uses the raw list: if the mount truly has only
+    // dotfiles in it, we still want to show those once the user
+    // enables hidden files, instead of declaring the mount empty.
+    const visible = showHidden ? state.entries : state.entries.filter((e) => !isHiddenEntry(e.name))
     return (
       <S.Group>
-        {state.entries.map((e) => {
+        {visible.map((e) => {
           // A folder is open iff it is in the user-controlled `expanded`
           // set. No derived "force open" rules: user input is the only
           // source of truth for the tree shape.
@@ -263,6 +385,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                 showDetails={showDetails}
                 userById={userById}
                 groupById={groupById}
+                dropTarget={e.is_dir && dropTargetPath === e.path}
+                onDragOver={e.is_dir ? folderDragOver(e.path) : undefined}
+                onDragEnter={e.is_dir ? folderDragOver(e.path) : undefined}
+                onDragLeave={e.is_dir ? folderDragLeave(e.path) : undefined}
+                onDrop={e.is_dir ? folderDrop(e.path) : undefined}
               />
               {e.is_dir && open && renderDir(e.path, depth + 1)}
             </React.Fragment>
@@ -272,10 +399,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     )
   }
 
+  // Synthetic FileEntry for the mount root. It surfaces as a real row
+  // at the top of the tree so the user has a one-click way back to
+  // the root, even after drilling deep into sub-folders. The chevron
+  // doubles as a collapse-all affordance for the whole tree.
+  const rootEntry = useMemo<FileEntry>(() => ({
+    name: '/',
+    path: '',
+    is_dir: true,
+    size: 0,
+    modified_at: '',
+    mode: 0,
+  }), [])
+  const rootOpen = expanded.has('')
+
   return (
     <S.FileExplorerRoot>
       <S.Toolbar>
-        <S.PathBar title={`/${activePath}`}>{activePath ? `/${activePath}` : '/'}</S.PathBar>
         <S.DetailsToggle
           type="button"
           $active={showDetails}
@@ -297,7 +437,29 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         <Button size="sm" onClick={onCreateFile}>+ File</Button>
         <Button size="sm" variant="secondary" onClick={onCreateDir}>+ Folder</Button>
       </S.Toolbar>
-      <S.List>{renderDir('', 0)}</S.List>
+      <S.List>
+        {/* The synthetic root row sits at depth 0; its children — the
+            actual top-level entries — render one level deeper so the
+            indentation reads as "inside /". Collapsing the root via
+            its chevron hides the whole tree. */}
+        <FileTreeItem
+          entry={rootEntry}
+          depth={0}
+          open={rootOpen}
+          active={activePath === ''}
+          onActivate={activate}
+          onToggle={toggle}
+          showDetails={showDetails}
+          userById={userById}
+          groupById={groupById}
+          dropTarget={dropTargetPath === ''}
+          onDragOver={folderDragOver('')}
+          onDragEnter={folderDragOver('')}
+          onDragLeave={folderDragLeave('')}
+          onDrop={folderDrop('')}
+        />
+        {rootOpen && renderDir('', 1)}
+      </S.List>
     </S.FileExplorerRoot>
   )
 }

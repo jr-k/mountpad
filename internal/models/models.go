@@ -43,8 +43,12 @@ type MountPoint struct {
 	DefaultOwnerID *int64    `json:"default_owner_id,omitempty"`
 	DefaultGroupID *int64    `json:"default_group_id,omitempty"`
 	DefaultMode    uint16    `json:"default_mode"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// AvatarColor mirrors the user and group fields: optional CSS color
+	// override; empty means "use the deterministic palette entry for
+	// this id". Added in migration 0003 so old rows scan as "".
+	AvatarColor string    `json:"avatar_color"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Session struct {

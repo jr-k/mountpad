@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
+import { pushModal, popModal } from '@/lib/modalStack'
+
 import * as S from './styled'
 
 interface ModalProps {
@@ -32,11 +34,21 @@ interface ModalProps {
  * Portalling to body sidesteps both classes of bug.
  */
 export const Modal: React.FC<ModalProps> = ({ open, title, onClose, footer, children, onSubmit }) => {
+  // While the modal is open we (a) own Escape to close ourselves, and
+  // (b) raise the shared "any modal open" gate so window-level
+  // shortcuts elsewhere in the app (DirectoryView arrow navigation,
+  // the Cmd+S save shortcut, …) stop firing for keys typed inside the
+  // dialog. The counter survives nested modals correctly: push on
+  // mount, pop on unmount, in symmetric pairs.
   useEffect(() => {
     if (!open) return
+    pushModal()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      popModal()
+    }
   }, [open, onClose])
 
   if (!open) return null

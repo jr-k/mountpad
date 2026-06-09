@@ -3,7 +3,7 @@ import { router, usePage } from '@inertiajs/react'
 import { AppShell } from '@/layouts/AppShell'
 import { Button } from '@/components/Button'
 import { Input } from '@/components/Input'
-import { Avatar, AVATAR_PALETTE, resolveAvatarColor } from '@/components/Avatar'
+import { Avatar, AvatarColorPicker, resolveAvatarColor } from '@/components/Avatar'
 import { api, HttpError } from '@/lib/api'
 import type { User } from '@/types/users'
 import type { SharedProps } from '@/types/inertia'
@@ -177,27 +177,10 @@ const ProfilePage: React.FC = () => {
             </SP.SectionHeader>
             <S.FormGrid>
               <S.FullRow>
-                <S.Swatches>
-                  <S.SwatchAuto
-                    type="button"
-                    $color="transparent"
-                    $active={form.avatar_color === ''}
-                    onClick={() => setForm({ ...form, avatar_color: '' })}
-                    title="Use the automatic color"
-                    aria-label="Automatic color"
-                  />
-                  {AVATAR_PALETTE.map((c) => (
-                    <S.Swatch
-                      key={c}
-                      type="button"
-                      $color={c}
-                      $active={form.avatar_color.toLowerCase() === c.toLowerCase()}
-                      onClick={() => setForm({ ...form, avatar_color: c })}
-                      title={c}
-                      aria-label={`Color ${c}`}
-                    />
-                  ))}
-                </S.Swatches>
+                <AvatarColorPicker
+                  value={form.avatar_color}
+                  onChange={(c) => setForm({ ...form, avatar_color: c })}
+                />
               </S.FullRow>
             </S.FormGrid>
           </SP.Section>

@@ -39,3 +39,46 @@ export const AvatarCircle = styled.span<{ $bg: string; $size: number }>`
 `
 
 AvatarCircle.displayName = 'Avatar.Circle'
+
+// ── AvatarColorPicker styled parts ─────────────────────────────────────
+// The swatch grid sits inside any "edit avatar color" form. Kept here
+// so swatch + circle share spacing and accent treatment (both keyed
+// to AVATAR_PALETTE) and so a future palette tweak only needs to
+// touch this package.
+export const SwatchRow = styled.div<{ $size: number }>`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => `${theme.space[2]} 0`};
+`
+SwatchRow.displayName = 'AvatarColorPicker.Row'
+
+export const Swatch = styled.button<{ $color: string; $size: number; $active?: boolean }>`
+  width: ${({ $size }) => $size}px;
+  height: ${({ $size }) => $size}px;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  background: ${({ $color }) => $color};
+  outline: 2px solid ${({ $active, theme }) => ($active ? theme.color.accent : 'transparent')};
+  outline-offset: 2px;
+  transition: transform 120ms ease;
+  &:hover { transform: scale(1.08); }
+`
+Swatch.displayName = 'AvatarColorPicker.Swatch'
+
+// The "auto" swatch represents the deterministic palette fallback. We
+// draw a diagonal stripe so it's visually distinct from the explicit
+// colour chips next to it (and reads as "no override").
+export const SwatchAuto = styled(Swatch)`
+  background:
+    repeating-linear-gradient(
+      135deg,
+      ${({ theme }) => theme.color.bgElev} 0,
+      ${({ theme }) => theme.color.bgElev} 6px,
+      ${({ theme }) => theme.color.border} 6px,
+      ${({ theme }) => theme.color.border} 12px
+    );
+`
+SwatchAuto.displayName = 'AvatarColorPicker.SwatchAuto'

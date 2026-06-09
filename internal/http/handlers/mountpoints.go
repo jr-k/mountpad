@@ -30,6 +30,11 @@ type mountPayload struct {
 	DefaultOwnerID *int64 `json:"default_owner_id,omitempty"`
 	DefaultGroupID *int64 `json:"default_group_id,omitempty"`
 	DefaultMode    uint16 `json:"default_mode"`
+	// AvatarColor is a CSS color string ("#rrggbb") or "" to mean "use
+	// the deterministic palette". We accept it on every write — empty
+	// is a valid value and the only way for the user to clear a
+	// previously picked colour.
+	AvatarColor string `json:"avatar_color"`
 }
 
 func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +47,7 @@ func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HostPath: p.HostPath, IsActive: p.IsActive,
 		DefaultOwnerID: p.DefaultOwnerID, DefaultGroupID: p.DefaultGroupID,
 		DefaultMode: p.DefaultMode,
+		AvatarColor: p.AvatarColor,
 	}
 	if err := h.Svc.Create(r.Context(), m); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest); return
@@ -66,6 +72,10 @@ func (h *MountPointsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	m.DefaultOwnerID = p.DefaultOwnerID
 	m.DefaultGroupID = p.DefaultGroupID
 	if p.DefaultMode != 0 { m.DefaultMode = p.DefaultMode }
+	// Empty string is a valid value (the user explicitly cleared the
+	// custom colour to fall back on the deterministic palette), so we
+	// always assign instead of guarding with `if != ""`.
+	m.AvatarColor = p.AvatarColor
 	if err := h.Svc.Update(r.Context(), m); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest); return
 	}

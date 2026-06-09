@@ -8,6 +8,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Logo } from '@/components/Logo'
 import { PermissionMatrix } from '@/components/PermissionMatrix'
 import { RowMenu } from '@/components/RowMenu'
+import { Avatar, AvatarColorPicker } from '@/components/Avatar'
 import { api, HttpError } from '@/lib/api'
 import { formatMode, modeToOctal } from '@/lib/permissions'
 import type { MountPoint } from '@/types/files'
@@ -39,11 +40,13 @@ interface MountForm {
   host_path: string
   is_active: boolean
   default_mode: number
+  /** Empty string = use the deterministic palette derived from the id. */
+  avatar_color: string
 }
 
 const emptyForm: MountForm = {
   slug: '', name: '', description: '', host_path: '',
-  is_active: true, default_mode: 0o750,
+  is_active: true, default_mode: 0o750, avatar_color: '',
 }
 
 const formFromMount = (m: MountPoint): MountForm => ({
@@ -53,6 +56,7 @@ const formFromMount = (m: MountPoint): MountForm => ({
   host_path: m.host_path,
   is_active: m.is_active,
   default_mode: m.default_mode,
+  avatar_color: m.avatar_color ?? '',
 })
 
 // slugify normalises a display name into a URL-safe slug:
@@ -208,13 +212,21 @@ const MountPointsSettingsPage: React.FC = () => {
                     <tr key={m.id}>
                       <td><SP.RowNum>{idx + 1}</SP.RowNum></td>
                       <td>
-                        <SP.LinkCell
-                          type="button"
-                          onClick={() => openEdit(m)}
-                          title={`Edit ${m.name}`}
-                        >
-                          {m.name}
-                        </SP.LinkCell>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <Avatar
+                            id={m.id}
+                            color={m.avatar_color}
+                            labels={[m.name, m.slug]}
+                            size={28}
+                          />
+                          <SP.LinkCell
+                            type="button"
+                            onClick={() => openEdit(m)}
+                            title={`Edit ${m.name}`}
+                          >
+                            {m.name}
+                          </SP.LinkCell>
+                        </div>
                       </td>
                       <td><code>{m.host_path}</code></td>
                       <td>
@@ -285,6 +297,37 @@ const MountPointsSettingsPage: React.FC = () => {
             />
             <Input label="Host path" placeholder="/storage/docs" value={form.host_path} onChange={(e) => setForm({ ...form, host_path: e.target.value })} />
             <Input label="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+              <span style={{ fontSize: 12, color: t.color.textMuted }}>Avatar</span>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                padding: '10px 12px',
+                border: `1px solid ${t.color.border}`,
+                borderRadius: t.radius.md,
+                background: t.color.bgSubtle,
+              }}>
+                {/* Live preview. Pass the id when editing so the auto
+                    swatch lands on the same deterministic palette
+                    entry that the sidebar will render; for new mounts
+                    we pass -1 (= neutral graphite slot) until the row
+                    actually exists. */}
+                <Avatar
+                  id={typeof editing === 'object' ? editing?.id ?? -1 : -1}
+                  color={form.avatar_color}
+                  labels={[form.name, form.slug]}
+                  size={40}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <AvatarColorPicker
+                    value={form.avatar_color}
+                    onChange={(c) => setForm({ ...form, avatar_color: c })}
+                  />
+                </div>
+              </div>
+            </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
               <span style={{ fontSize: 12, color: t.color.textMuted }}>Default permission mode</span>
