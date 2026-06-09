@@ -16,8 +16,14 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
+# VERSION is injected by the release pipeline (typically the git tag
+# without its leading `v`). It lands in internal/version.Version via
+# ldflags so the status bar can render it without a runtime lookup.
+ARG VERSION=dev
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X github.com/mountpad/mountpad/internal/version.Version=${VERSION}" \
     -o /out/mountpad ./cmd/mountpad
 
 # ---------- dev image (hot reload via Vite + air) ----------
