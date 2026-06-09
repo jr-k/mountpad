@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS app_settings;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS mount_points;
+DROP TABLE IF EXISTS user_groups;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;

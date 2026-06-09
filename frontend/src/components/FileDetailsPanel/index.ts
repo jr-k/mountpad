@@ -1,0 +1,1 @@
+export { FileDetailsPanel } from './FileDetailsPanel'

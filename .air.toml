@@ -1,0 +1,18 @@
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  bin = "./tmp/mountpad"
+  cmd = "go build -o ./tmp/mountpad ./cmd/mountpad"
+  include_ext = ["go"]
+  exclude_dir = ["assets", "tmp", "vendor", "node_modules", "frontend/node_modules", "frontend/dist"]
+  delay = 600
+  send_interrupt = true
+  kill_delay = "0s"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true
