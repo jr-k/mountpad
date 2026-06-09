@@ -43,9 +43,14 @@ RUN apk add --no-cache ca-certificates tzdata \
  && mkdir -p /app /storage \
  && chown -R mountpad:mountpad /app /storage
 WORKDIR /app
-COPY --from=backend-builder /out/mountpad /app/mountpad
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
-COPY migrations /app/migrations
+# --chown on every COPY so the unprivileged runtime user owns the
+# files end-to-end. Without it, COPY plants root-owned files even
+# though the parent directory was chowned earlier, which causes
+# permission denied on any later write (the inertia template
+# fallback used to silently miss for this reason).
+COPY --chown=mountpad:mountpad --from=backend-builder /out/mountpad /app/mountpad
+COPY --chown=mountpad:mountpad --from=frontend-builder /app/frontend/dist /app/frontend/dist
+COPY --chown=mountpad:mountpad migrations /app/migrations
 USER mountpad
 ENV MOUNTPAD_HTTP_ADDR=":4499" \
     MOUNTPAD_FRONTEND_DIST="/app/frontend/dist"
