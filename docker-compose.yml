@@ -2,15 +2,15 @@
 #
 # Two host bind-mounts:
 #   • $STORAGE_HOST_PATH → /storage    user-facing data (mount points).
-#   • $DATA_HOST_PATH    → /data       app-internal state (SQLite DB,
-#                                       future server state).
-# Keeping them separate means a backup of /data captures the app state
+#   • $DB_HOST_PATH      → /db         app-internal DB directory
+#                                       (SQLite file lives here).
+# Keeping them separate means a backup of /db captures the app state
 # regardless of which mount points exist, and /storage stays purely
 # for user data.
 #
 # Engine is selected via DB_ENGINE in your .env (default: sqlite).
-#   • sqlite   → no extra service, the DB file lives in /data on the
-#                $DATA_HOST_PATH bind-mount.
+#   • sqlite   → no extra service, the DB file lives in /db on the
+#                $DB_HOST_PATH bind-mount.
 #   • postgres → add `--profile postgres` (or set COMPOSE_PROFILES=postgres
 #                in .env) so the bundled Postgres service comes up alongside
 #                the app.
@@ -50,9 +50,9 @@ services:
       # exotic setups not covered by the decomposed variables.
       DB_ENGINE: ${DB_ENGINE:-sqlite}
 
-      # SQLite - file lives inside the dedicated /data volume so the
+      # SQLite - file lives inside the dedicated /db volume so the
       # app state stays cleanly separated from user-facing /storage.
-      DB_FILE: ${DB_FILE:-/data/mountpad.db}
+      DB_FILE: ${DB_FILE:-/db/mountpad.db}
 
       # Postgres - points at the bundled `postgres` service by default.
       # Override host/port to talk to an external cluster instead.
@@ -66,7 +66,7 @@ services:
       - "${MOUNTPAD_PORT:-4499}:4499"
     volumes:
       - ${STORAGE_HOST_PATH:-./storage}:/storage
-      - ${DATA_HOST_PATH:-./data}:/data
+      - ${DB_HOST_PATH:-./db}:/db
 
   postgres:
     image: postgres:16-alpine

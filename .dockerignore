@@ -8,5 +8,5 @@ frontend/dist
 *.log
 *.db
 examples/storage
-data
+db
 storage
