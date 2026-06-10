@@ -294,19 +294,34 @@ export const Row = styled.tr<{ $active?: boolean; $dragging?: boolean; $dropTarg
 `
 
 export const Icon = styled.span`
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
-  text-align: center;
-  font-size: 16px;
+  height: 22px;
   line-height: 1;
   margin-right: ${({ theme }) => theme.space[2]};
   vertical-align: middle;
-  font-family:
-    "Apple Color Emoji",
-    "Segoe UI Emoji",
-    "Noto Color Emoji",
-    "Twemoji Mozilla",
-    sans-serif;
+  flex-shrink: 0;
+  pointer-events: none;
+`
+
+// IconImg renders a real thumbnail inside the same 22×22 footprint
+// as the emoji icon used by every other file type. object-fit:
+// cover crops the thumbnail to fill the box so a wide panorama
+// and a square avatar both read as "image" at the same visual
+// weight in the list. We give it a tiny border-radius so the
+// edges don't fight with the row hover background.
+export const IconImg = styled.img`
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 3px;
+  margin-right: ${({ theme }) => theme.space[2]};
+  vertical-align: middle;
+  background: ${({ theme }) => theme.color.bgSubtle};
+  pointer-events: none;
 `
 
 export const EmptyCell = styled.td`
@@ -380,14 +395,28 @@ export const Tile = styled.button<{ $active?: boolean; $dragging?: boolean; $dro
   }
 `
 
+// TileIconImg fills the same 56×56 slot as TileIcon but with the
+// actual image content. The slightly rounded corners + subtle
+// background colour keep the tile visually anchored while loading
+// (the bg fills the box before the thumbnail decodes).
+export const TileIconImg = styled.img`
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ theme }) => theme.color.bgSubtle};
+  pointer-events: none;
+`
+
 export const TileIcon = styled.span`
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 44px;
   line-height: 1;
   width: 56px;
   height: 56px;
+  pointer-events: none;
   font-family:
     "Apple Color Emoji",
     "Segoe UI Emoji",
@@ -408,12 +437,14 @@ export const TileName = styled.span`
   font-size: ${({ theme }) => theme.font.size.sm};
   line-height: 1.25;
   max-width: 100%;
+  pointer-events: none;
 `
 
 export const TileMeta = styled.span`
   font-family: ${({ theme }) => theme.font.mono};
   font-size: ${({ theme }) => theme.font.size.xs};
   color: ${({ theme }) => theme.color.textFaint};
+  pointer-events: none;
 `
 
 export const EmptyTile = styled.div`

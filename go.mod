@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.5.2
 	github.com/romsar/gonertia v1.3.5
 	golang.org/x/crypto v0.21.0
+	golang.org/x/image v0.18.0
 	modernc.org/sqlite v1.29.5
 )
 
@@ -25,9 +26,9 @@ require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.uber.org/atomic v1.7.0 // indirect
-	golang.org/x/sync v0.5.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.18.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.16.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.41.0 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

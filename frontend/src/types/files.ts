@@ -69,9 +69,20 @@ export interface ReadResponse {
    * Base64-encoded bytes returned alongside `is_binary: true` so the
    * frontend can render a hex preview. Capped server-side at 256 KiB;
    * `truncated` is set when the file was larger than the cap.
+   *
+   * NOT populated when `media_kind` is set: the client is expected
+   * to fetch the bytes through the dedicated /raw endpoint, so the
+   * server skips the base64 detour to save bandwidth.
    */
   content_base64?: string
   truncated?: boolean
+  /**
+   * When set, the file is a media type the browser can render
+   * natively: image | video | audio | pdf. The workspace swaps the
+   * hex editor for a dedicated <MediaPreview> that points at the
+   * /raw endpoint instead of decoding base64.
+   */
+  media_kind?: 'image' | 'video' | 'audio' | 'pdf'
 }
 
 export interface ACLView {

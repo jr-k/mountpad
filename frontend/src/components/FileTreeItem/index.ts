@@ -1,1 +1,1 @@
-export { FileTreeItem, iconFor } from './FileTreeItem'
+export { FileTreeItem } from './FileTreeItem'

@@ -1,6 +1,7 @@
 import React from 'react'
 import type { FileEntry } from '@/types/files'
 import { formatMode } from '@/lib/permissions'
+import { FileIcon } from '@/lib/fileIcon'
 
 import * as S from './styled'
 
@@ -39,89 +40,6 @@ interface FileTreeItemProps {
   onDragEnter?: (ev: React.DragEvent) => void
   onDragLeave?: (ev: React.DragEvent) => void
   onDrop?: (ev: React.DragEvent) => void
-}
-
-// iconFor returns an emoji-based glyph that scales nicely (~16-18px) and is
-// readable at a glance, replacing the previous unicode triangles.
-// Exported so the directory view can reuse the same icon mapping and the
-// whole app stays visually consistent.
-export function iconFor(entry: FileEntry, open: boolean): string {
-  if (entry.is_dir) return open ? '📂' : '📁'
-
-  const lower = entry.name.toLowerCase()
-  const ext = lower.includes('.') ? lower.slice(lower.lastIndexOf('.') + 1) : ''
-
-  switch (ext) {
-    case 'md':
-    case 'markdown':
-    case 'txt':
-    case 'rst':
-    case 'log':
-      return '📝'
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-    case 'webp':
-    case 'svg':
-    case 'bmp':
-    case 'ico':
-      return '🖼️'
-    case 'mp3':
-    case 'wav':
-    case 'ogg':
-    case 'flac':
-    case 'm4a':
-      return '🎵'
-    case 'mp4':
-    case 'mov':
-    case 'mkv':
-    case 'webm':
-    case 'avi':
-      return '🎬'
-    case 'zip':
-    case 'tar':
-    case 'gz':
-    case 'tgz':
-    case 'bz2':
-    case '7z':
-    case 'rar':
-      return '📦'
-    case 'pdf':
-      return '📕'
-    case 'json':
-    case 'yaml':
-    case 'yml':
-    case 'toml':
-    case 'env':
-    case 'ini':
-    case 'conf':
-      return '⚙️'
-    case 'js':
-    case 'jsx':
-    case 'ts':
-    case 'tsx':
-    case 'go':
-    case 'py':
-    case 'rs':
-    case 'rb':
-    case 'java':
-    case 'kt':
-    case 'c':
-    case 'cpp':
-    case 'h':
-    case 'hpp':
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-    case 'css':
-    case 'scss':
-    case 'html':
-    case 'sql':
-      return '📜'
-    default:
-      return '📄'
-  }
 }
 
 // labelFor pulls a friendly label from the id maps, with a Linux-style dash
@@ -192,7 +110,9 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
       ) : (
         <S.DisclosureSpacer aria-hidden />
       )}
-      <S.Icon aria-hidden>{iconFor(entry, !!open)}</S.Icon>
+      <S.Icon aria-hidden>
+        <FileIcon entry={entry} open={!!open} size={16} />
+      </S.Icon>
       <S.Name>{entry.name}</S.Name>
       {showDetails && (
         <S.Details>
