@@ -1,8 +1,5 @@
 name: Release
 
-# Triggers on any `v*` tag push (typically `git tag v1.2.3 && git push --tags`).
-# A manual workflow_dispatch is also wired in so we can re-run a publish
-# without recreating the tag, useful when GHCR or a runner has a flake.
 on:
   push:
     tags: ['v*']
@@ -12,38 +9,30 @@ on:
         description: 'Tag to publish (e.g. v1.2.3). Required when dispatched manually.'
         required: true
 
-# Lets the workflow push images to GHCR under the same owner as the repo
-# without configuring a PAT. `contents: read` is implicit but spelled out
-# for clarity.
 permissions:
   contents: read
   packages: write
 
-jobs:
-  docker:
-    name: Build & publish container image
-    runs-on: ubuntu-latest
-    env:
-      # ghcr.io/<owner>/<repo> in lowercase. `github.repository` already
-      # contains both halves; we just lowercase it so users with mixed-
-      # case org names still get a valid OCI reference.
-      IMAGE: ghcr.io/${{ github.repository }}
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Resolve the tag we're publishing. For tag pushes,
-          # `github.ref_name` is the tag; for manual runs, the user
-          # supplies it via the input.
           ref: ${{ inputs.tag || github.ref_name }}
-
-      # QEMU + Buildx together unlock multi-arch builds on a single
-      # ubuntu-latest runner. arm64 runs slower under emulation, but
-      # the alternative (matrixing across native runners) is more
-      # plumbing than it's worth for a small Go service.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -55,10 +44,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # metadata-action turns the tag (e.g. `v1.2.3`) into the full set
-      # of conventional Docker tags: `1.2.3`, `1.2`, `1`, plus `latest`
-      # for the most recent stable. Pre-release tags (e.g. `v1.2.3-rc1`)
-      # only get the exact-version tag and do NOT update `latest`.
       - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v5
@@ -75,32 +60,76 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
 
-      # The VERSION build-arg lands in the Go binary via -ldflags so
-      # the status bar in the running app shows the same tag this image
-      # was built from. We strip the leading `v` to match the convention
-      # the metadata-action follows for the image tags themselves.
       - name: Compute build version
         id: version
         run: |
           ref="${{ inputs.tag || github.ref_name }}"
           echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build & push
+      - name: Build & push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          # `prod` is the publishable image; the `dev` stage in the
-          # same Dockerfile is for local hot-reload only.
           target: prod
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
-          # Use the GitHub Actions cache backend so the heaviest layers
-          # (Go module download, frontend npm install, frontend build)
-          # survive across runs. `mode=max` writes every intermediate
-          # layer, not just the final one.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Create & push manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
