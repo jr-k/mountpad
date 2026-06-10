@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, fsApi, HttpError } from '@/lib/api'
 import type { FileEntry } from '@/types/files'
-import { iconFor } from '@/components/FileTreeItem'
+import { FileIcon } from '@/lib/fileIcon'
 import { LoadingState } from '@/components/LoadingState'
 import { ErrorState } from '@/components/ErrorState'
 import { formatMode } from '@/lib/permissions'
@@ -9,6 +9,7 @@ import {
   MOVE_MIME, setActiveDrag, clearActiveDrag,
   isValidDropTarget, performDropMove,
 } from '@/lib/dnd'
+import type { MoveError } from '@/lib/dnd'
 import { isAnyModalOpen } from '@/lib/modalStack'
 import { useShowHidden, isHiddenEntry } from '@/hooks/useShowHidden'
 
@@ -156,6 +157,25 @@ interface DirectoryViewProps {
    * the component having to reach into DirectoryView's internals.
    */
   onCountsChange?: (counts: { visible: number; total: number }) => void
+  /**
+   * Triggered by the Backspace / Delete keyboard shortcut when the
+   * user has at least one entry selected in the listing. The parent
+   * pipes this into the same flow as the toolbar's Delete button so
+   * the confirmation modal, recursive-folder handling and partial-
+   * failure reporting are shared between the click and the keypress
+   * paths. No-op when omitted (component falls back to ignoring the
+   * key).
+   */
+  onDeleteShortcut?: () => void
+  /**
+   * Fired when one or more drag-and-drop moves fail (typically a
+   * name collision in the destination folder, but also permission
+   * denials, missing sources, etc.). The parent surfaces the
+   * resulting list in a modal so the user understands why the
+   * silent "nothing happened" was actually a refusal. No-op when
+   * omitted (errors are swallowed as before).
+   */
+  onMoveErrors?: (errors: MoveError[]) => void
 }
 
 // Marquee state captured at mousedown. The starting coordinates are
@@ -199,9 +219,76 @@ const typeOf = (entry: FileEntry): string => {
   return entry.name.slice(dot + 1).toUpperCase()
 }
 
+// Extensions the server thumbnailer can decode. Kept in lockstep
+// with internal/imaging side-effect imports: jpeg / png / gif /
+// webp / bmp. SVG is handled separately via /raw - it's already a
+// vector and rasterising it server-side just adds work for no
+// quality gain.
+const RASTER_THUMB_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
+const extOf = (name: string): string => {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+const isRasterThumb = (name: string): boolean => RASTER_THUMB_EXT.has(extOf(name))
+const isSvg = (name: string): boolean => extOf(name) === 'svg'
+
+// EntryIcon renders the small visual marker for an entry in the
+// listing. Three rendering modes, in priority order:
+//
+//  1. Raster image → <img> pointed at the backend /thumb endpoint
+//     (real preview at the same size as the icon slot).
+//  2. SVG → <img> pointed at /raw (vector renders cleanly at any
+//     size without server-side rasterisation).
+//  3. Everything else (folders, code files, archives, …) → an
+//     iconify glyph from the vscode-icons collection via
+//     <FileIcon>. Folders also land here.
+//
+// onError on the thumbnail variants falls back to the iconify
+// glyph rather than the emoji - one polished icon system rather
+// than two.
+const EntryIcon: React.FC<{
+  entry: FileEntry
+  mountId: number
+  variant: 'list' | 'grid'
+}> = ({ entry, mountId, variant }) => {
+  const [failed, setFailed] = useState(false)
+  const iconSize = variant === 'grid' ? 48 : 18
+
+  const fallback = variant === 'grid'
+    ? <S.TileIcon aria-hidden><FileIcon entry={entry} size={iconSize} /></S.TileIcon>
+    : <S.Icon aria-hidden><FileIcon entry={entry} size={iconSize} /></S.Icon>
+
+  if (entry.is_dir || failed) return fallback
+
+  if (isRasterThumb(entry.name)) {
+    // Request size is bumped to ~2× the rendered slot so retina
+    // displays still see crisp pixels. The backend caps at 512px
+    // (MaxThumbDim) and short-circuits to 415 on huge sources -
+    // those land in `failed` and surface the iconify glyph.
+    const reqSize = variant === 'grid' ? 144 : 48
+    const src = fsApi(mountId).thumbUrl(entry.path, reqSize)
+    return variant === 'grid'
+      ? <S.TileIconImg src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />
+      : <S.IconImg src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />
+  }
+
+  if (isSvg(entry.name)) {
+    // SVGs render at any size; we point the browser at the raw
+    // file with the same cropping treatment. Wrapping in <img>
+    // (not <object>) silently strips any embedded script, so the
+    // preview is safe even on untrusted sources.
+    const src = fsApi(mountId).rawUrl(entry.path)
+    return variant === 'grid'
+      ? <S.TileIconImg src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />
+      : <S.IconImg src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />
+  }
+
+  return fallback
+}
+
 export const DirectoryView: React.FC<DirectoryViewProps> = ({
   mountId, path, refreshKey, onOpenEntry, onSelectionChange, onSelectedEntriesChange, onNavigatePath,
-  onAfterMutation, pendingFocus, onPendingFocusConsumed, onCountsChange,
+  onAfterMutation, pendingFocus, onPendingFocusConsumed, onCountsChange, onDeleteShortcut, onMoveErrors,
 }) => {
   const [entries, setEntries] = useState<FileEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -783,34 +870,48 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     ev.dataTransfer.effectAllowed = 'move'
 
     // Compose the floating ghost: icon + first filename + optional
-    // "+N" badge when more than one entry follows the cursor.
+    // "+N" badge when more than one entry follows the cursor. The
+    // glyph is a tiny inline SVG (folder for dirs, document for
+    // files) - no emoji, no font fallback gymnastics, and crucially
+    // no async iconify resolution (setDragImage runs synchronously
+    // and snapshots whatever is in the DOM right now).
     const ghost = dragGhostRef.current
     if (ghost) {
       const first = sourcePaths[0]
       const firstEntry = sorted.find((e) => e.path === first)
-      const icon = firstEntry ? iconFor(firstEntry, false) : '📄'
+      const isFolder = !!firstEntry?.is_dir
       const name = firstEntry?.name ?? first
       const extra = sourcePaths.length - 1
-      ghost.innerHTML = ''
-      const iconEl = document.createElement('span')
-      iconEl.textContent = icon
-      iconEl.style.cssText = 'font-size:16px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;'
+
+      const svgNs = 'http://www.w3.org/2000/svg'
+      const svg = document.createElementNS(svgNs, 'svg')
+      svg.setAttribute('width', '16')
+      svg.setAttribute('height', '16')
+      svg.setAttribute('viewBox', '0 0 24 24')
+      svg.setAttribute('fill', 'none')
+      svg.setAttribute('stroke', 'currentColor')
+      svg.setAttribute('stroke-width', '1.8')
+      svg.setAttribute('stroke-linecap', 'round')
+      svg.setAttribute('stroke-linejoin', 'round')
+      const path = document.createElementNS(svgNs, 'path')
+      path.setAttribute('d', isFolder
+        ? 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'
+        : 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6zM14 3v6h6')
+      svg.appendChild(path)
+
       const nameEl = document.createElement('span')
       nameEl.textContent = name
       nameEl.style.cssText = 'overflow:hidden;text-overflow:ellipsis;max-width:240px;'
-      ghost.appendChild(iconEl)
+
+      ghost.innerHTML = ''
+      ghost.appendChild(svg)
       ghost.appendChild(nameEl)
       if (extra > 0) {
         const badge = document.createElement('span')
         badge.textContent = `+${extra}`
-        badge.style.cssText = 'padding:1px 6px;border-radius:999px;background:currentColor;color:transparent;font-size:11px;font-weight:600;'
-        // currentColor for background, transparent for text would hide it; flip:
-        badge.style.color = '#fff'
-        badge.style.background = 'rgb(56,139,253)'
+        badge.style.cssText = 'padding:1px 6px;border-radius:999px;color:#fff;background:rgb(56,139,253);font-size:11px;font-weight:600;'
         ghost.appendChild(badge)
       }
-      // Cursor anchored slightly inside the top-left of the preview
-      // so the badge stays visible to the right of the pointer.
       ev.dataTransfer.setDragImage(ghost, 12, 12)
     }
 
@@ -857,8 +958,9 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
       ev.stopPropagation()
       setDropTargetPath(null)
       setDraggingPaths(new Set())
-      const { attempted, failed } = await performDropMove(mountId, targetFolder)
+      const { attempted, failed, errors } = await performDropMove(mountId, targetFolder)
       if (attempted > 0 && failed < attempted) onAfterMutation?.()
+      if (errors.length > 0) onMoveErrors?.(errors)
     }
 
   // Live "what would be selected if the user released now" set. Used
@@ -918,18 +1020,28 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   //   the keyboard contract bound to the visible selection instead of
   //   stale browser focus left behind by an earlier click. Space is
   //   deliberately NOT a synonym so we don't hijack page scrolling.
+  // - Backspace / Delete: forward to onDeleteShortcut so the parent's
+  //   delete confirmation modal opens with the current selection -
+  //   same code path as the toolbar's Delete button. Cmd / Ctrl
+  //   modifiers are accepted (macOS Finder convention is Cmd+Delete)
+  //   but Shift / Alt are not, to leave well-known editing shortcuts
+  //   alone if focus happens to be elsewhere.
   useEffect(() => {
     if (sorted.length === 0) return
     const onKey = (ev: KeyboardEvent) => {
       const key = ev.key
       const isArrow = key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight'
       const isActivate = key === 'Enter'
-      if (!isArrow && !isActivate) return
-      // Modifier guard: arrows accept Shift (range extend); activation
-      // accepts no modifier. Anything else is a system shortcut and
-      // we keep our hands off it.
-      if (ev.metaKey || ev.ctrlKey || ev.altKey) return
-      if (isActivate && ev.shiftKey) return
+      const isDelete = key === 'Backspace' || key === 'Delete'
+      if (!isArrow && !isActivate && !isDelete) return
+      // Modifier guard, per-action:
+      //   arrows  - Shift accepted (range extend), nothing else
+      //   activate - no modifier
+      //   delete  - Cmd / Ctrl accepted (Finder-style), Shift / Alt
+      //             not
+      if (isArrow && (ev.metaKey || ev.ctrlKey || ev.altKey)) return
+      if (isActivate && (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey)) return
+      if (isDelete && (ev.altKey || ev.shiftKey)) return
       // A modal sitting on top owns the keyboard while it's open -
       // pressing Enter inside a rename input must not also activate
       // whatever the DirectoryView cursor was pointing at underneath.
@@ -938,6 +1050,17 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
       if (target) {
         const tag = target.tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return
+      }
+
+      if (isDelete) {
+        // No-op when nothing is selected: let Backspace fall through
+        // to whatever the browser would normally do (page back on
+        // legacy browsers, no-op elsewhere). Only swallow the key
+        // once we're actually going to act on it.
+        if (selectedPaths.size === 0 || !onDeleteShortcut) return
+        ev.preventDefault()
+        onDeleteShortcut()
+        return
       }
 
       // Resolve where the cursor currently sits. Prefer the explicit
@@ -1013,7 +1136,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursorPath, anchorPath, selectedPaths, sorted, mode, onOpenEntry])
+  }, [cursorPath, anchorPath, selectedPaths, sorted, mode, onOpenEntry, onDeleteShortcut])
 
   // Keep the cursor item in view as the selection moves through arrow
   // keys. `block: 'nearest'` mirrors native file managers: no scroll
@@ -1208,6 +1331,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
             ? <ErrorState title="Failed to list" description={error} />
             : mode === 'grid'
               ? renderGrid({
+                  mountId,
                   sorted, selectedSet: viewSelection,
                   onClickEntry: handleEntryClick, onClickParent: clearSelection,
                   onOpenEntry, parentPath, onNavigatePath,
@@ -1220,6 +1344,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                   userById, groupById,
                 })
               : renderList({
+                  mountId,
                   sorted, selectedSet: viewSelection,
                   onClickEntry: handleEntryClick, onClickParent: clearSelection,
                   onOpenEntry, parentPath, onNavigatePath,
@@ -1257,6 +1382,8 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 // readability.
 
 interface LayoutProps {
+  /** Mount id, threaded down so EntryIcon can build /thumb URLs. */
+  mountId: number
   sorted: FileEntry[]
   /**
    * Set of paths currently rendered as highlighted. During a marquee
@@ -1318,6 +1445,7 @@ const labelFor = (id: number | null | undefined, map: Record<number, string>): s
 }
 
 const renderList = ({
+  mountId,
   sorted, selectedSet, onClickEntry, onClickParent, onOpenEntry, parentPath, onNavigatePath,
   draggingPaths, dropTargetPath,
   onDragStartEntry, onDragEndEntry,
@@ -1365,7 +1493,7 @@ const renderList = ({
             title="Parent folder"
           >
             <td className="name">
-              <S.Icon aria-hidden>{'\u21B0'}</S.Icon>
+              <S.Icon aria-hidden><ParentFolderIcon size={18} /></S.Icon>
               ..
             </td>
             {columns.map((c) => (
@@ -1404,7 +1532,7 @@ const renderList = ({
               {...dropHandlers}
             >
               <td className="name">
-                <S.Icon aria-hidden>{iconFor(e, false)}</S.Icon>
+                <EntryIcon entry={e} mountId={mountId} variant="list" />
                 {e.name}
               </td>
               {columns.map((c) => (
@@ -1431,6 +1559,7 @@ const tileMouseDown = (ev: React.MouseEvent) => {
 }
 
 const renderGrid = ({
+  mountId,
   sorted, selectedSet, onClickEntry, onClickParent, onOpenEntry, parentPath, onNavigatePath,
   draggingPaths, dropTargetPath,
   onDragStartEntry, onDragEndEntry,
@@ -1455,7 +1584,7 @@ const renderGrid = ({
         onDrop={onFolderDrop(parentPath)}
         title="Parent folder"
       >
-        <S.TileIcon aria-hidden>{'\u21B0'}</S.TileIcon>
+        <S.TileIcon aria-hidden><ParentFolderIcon size={40} /></S.TileIcon>
         <S.TileName>..</S.TileName>
         <S.TileMeta>Parent folder</S.TileMeta>
       </S.Tile>
@@ -1487,7 +1616,7 @@ const renderGrid = ({
           title={e.path}
           {...dropHandlers}
         >
-          <S.TileIcon aria-hidden>{iconFor(e, false)}</S.TileIcon>
+          <EntryIcon entry={e} mountId={mountId} variant="grid" />
           <S.TileName>{e.name}</S.TileName>
           <S.TileMeta>{e.is_dir ? typeOf(e) : formatBytes(e.size)}</S.TileMeta>
         </S.Tile>
@@ -1569,5 +1698,17 @@ const SortDescIcon: React.FC = () => (
     <line x1="3" y1="4"  x2="13" y2="4"  stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     <line x1="3" y1="8"  x2="11" y2="8"  stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     <line x1="3" y1="12" x2="9"  y2="12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+)
+
+// Bold "go up one level" arrow for the synthetic ".." parent row.
+// strokeWidth=2.4 makes it stand out from the thin file-type glyphs
+// so the user's eye catches the escape hatch at the top of the list
+// without hunting for a faint character.
+const ParentFolderIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M9 14l-4-4 4-4" />
+    <path d="M5 10h11a4 4 0 0 1 0 8h-1" />
   </svg>
 )

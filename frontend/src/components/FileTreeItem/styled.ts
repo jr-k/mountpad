@@ -94,16 +94,10 @@ DisclosureSpacer.displayName = 'FileTreeItem.DisclosureSpacer'
 export const Icon = styled.span`
   width: 20px;
   flex-shrink: 0;
-  text-align: center;
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
-  /* Emojis render best with system fonts; opt into color emoji explicitly. */
-  font-family:
-    "Apple Color Emoji",
-    "Segoe UI Emoji",
-    "Noto Color Emoji",
-    "Twemoji Mozilla",
-    sans-serif;
 `
 
 Icon.displayName = 'FileTreeItem.Icon'

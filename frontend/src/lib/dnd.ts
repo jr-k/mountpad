@@ -13,7 +13,7 @@
 // are short-lived and never crossed; React re-renders triggered by the
 // payload would just be noise.
 
-import { fsApi } from './api'
+import { fsApi, HttpError } from './api'
 
 /** MIME type stored on the native dataTransfer to identify our payload. */
 export const MOVE_MIME = 'application/x-mountpad-move'
@@ -73,33 +73,79 @@ const parentOf = (p: string): string => {
 }
 
 /**
+ * Per-entry error returned by performDropMove. `path` is the source
+ * path (so the UI can render the entry name); `reason` is a human-
+ * readable phrase, NOT a raw backend message - we translate the
+ * common HTTP codes here so every drop site surfaces the same
+ * wording without each one having to re-implement the mapping.
+ */
+export interface MoveError {
+  path: string
+  reason: string
+}
+
+const reasonForRenameError = (err: unknown, destName: string): string => {
+  if (err instanceof HttpError) {
+    switch (err.status) {
+      case 409:
+        // Backend returns ErrAlreadyExists → 409 when the destination
+        // path already exists. Most common cause for a "nothing
+        // happens" silent failure - we now spell it out.
+        return `An item named "${destName}" already exists in the destination folder.`
+      case 403:
+        return 'Permission denied: you cannot write into the destination folder.'
+      case 404:
+        return 'The source no longer exists - it may have been moved or deleted.'
+      case 400:
+        return 'The destination path is invalid (rejected by the server).'
+      case 415:
+        return 'The source is a symbolic link, which the server is configured to refuse.'
+    }
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
  * Execute the move for the active drag onto `targetFolder`. Renames
  * each entry in parallel via the rename endpoint (the backend treats
  * cross-folder renames as moves). Entries that would land on top of
  * themselves are filtered out beforehand so the caller doesn't have
- * to. Resolves with the count of attempted vs successful renames.
+ * to.
+ *
+ * Returns the attempted count alongside a per-entry `errors` array
+ * with translated, user-facing reasons. `failed === errors.length`
+ * by construction; callers can pick whichever shape is more
+ * convenient (`failed` for the booleans, `errors` for the modal
+ * body).
  */
 export async function performDropMove(
   targetMountId: number,
   targetFolder: string,
-): Promise<{ attempted: number; failed: number }> {
+): Promise<{ attempted: number; failed: number; errors: MoveError[] }> {
   const a = active
   clearActiveDrag()
-  if (!a) return { attempted: 0, failed: 0 }
-  if (a.mountId !== targetMountId) return { attempted: 0, failed: 0 }
+  if (!a) return { attempted: 0, failed: 0, errors: [] }
+  if (a.mountId !== targetMountId) return { attempted: 0, failed: 0, errors: [] }
   const moves = a.paths.filter((p) => {
     if (targetFolder === p) return false
     if (p !== '' && targetFolder.startsWith(p + '/')) return false
     if (parentOf(p) === targetFolder) return false
     return true
   })
-  if (moves.length === 0) return { attempted: 0, failed: 0 }
+  if (moves.length === 0) return { attempted: 0, failed: 0, errors: [] }
   const api = fsApi(a.mountId)
   const results = await Promise.allSettled(moves.map((from) => {
     const name = from.includes('/') ? from.slice(from.lastIndexOf('/') + 1) : from
     const to = targetFolder ? `${targetFolder}/${name}` : name
     return api.rename(from, to)
   }))
-  const failed = results.reduce((n, r) => n + (r.status === 'rejected' ? 1 : 0), 0)
-  return { attempted: moves.length, failed }
+  const errors: MoveError[] = []
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      const from = moves[i]
+      const name = from.includes('/') ? from.slice(from.lastIndexOf('/') + 1) : from
+      errors.push({ path: from, reason: reasonForRenameError(r.reason, name) })
+    }
+  })
+  return { attempted: moves.length, failed: errors.length, errors }
 }

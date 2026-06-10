@@ -7,6 +7,7 @@ import { LoadingState } from '@/components/LoadingState'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { MOVE_MIME, isValidDropTarget, performDropMove } from '@/lib/dnd'
+import type { MoveError } from '@/lib/dnd'
 import { useShowHidden, isHiddenEntry } from '@/hooks/useShowHidden'
 
 import * as S from './styled'
@@ -67,6 +68,13 @@ interface FileExplorerProps {
    */
   onAfterMutation?: () => void
   /**
+   * Fired when one or more drag-and-drop moves fail (e.g. name
+   * collision in the destination). The parent surfaces the list
+   * in a modal so the user knows why the silent "nothing happened"
+   * was actually a refusal.
+   */
+  onMoveErrors?: (errors: MoveError[]) => void
+  /**
    * Rewriting hint sent by the parent after a rename succeeds. Any
    * path in the `expanded` set that equals `from` or sits under it is
    * rewritten with the new prefix, so the user keeps their unfolded
@@ -122,7 +130,7 @@ function ancestorsOf(path: string): string[] {
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   mountId, activePath, onOpenFile, onChangeDir, onCreateFile, onCreateDir, refreshKey,
-  onRootForbidden, onAfterMutation, pendingRename, onPendingRenameConsumed,
+  onRootForbidden, onAfterMutation, onMoveErrors, pendingRename, onPendingRenameConsumed,
 }) => {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   // Initial value is read from localStorage so the very first render
@@ -158,7 +166,25 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       if (path === '' && err instanceof HttpError && err.status === 403) {
         onRootForbidden?.(mountId)
       }
-      setDirs((prev) => ({ ...prev, [path]: { loading: false, error: String(err), entries: [] } }))
+      // Non-root paths that fail (deleted/renamed folder still in
+      // localStorage, or a 500 for a path that no longer exists)
+      // are silently collapsed so we don't spam the backend with
+      // doomed requests on every subsequent refresh.
+      if (path !== '') {
+        setExpanded((prev) => {
+          if (!prev.has(path)) return prev
+          const next = new Set(prev)
+          next.delete(path)
+          return next
+        })
+        setDirs((prev) => {
+          const next = { ...prev }
+          delete next[path]
+          return next
+        })
+      } else {
+        setDirs((prev) => ({ ...prev, [path]: { loading: false, error: String(err), entries: [] } }))
+      }
     }
   }, [mountId, onRootForbidden])
 
@@ -331,7 +357,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     ev.preventDefault()
     ev.stopPropagation()
     setDropTargetPath(null)
-    const { attempted, failed } = await performDropMove(mountId, folderPath)
+    const { attempted, failed, errors } = await performDropMove(mountId, folderPath)
     if (attempted > 0 && failed < attempted) {
       // Pre-expand the destination so the user sees the moved entries
       // appear in their new home as soon as the refresh lands.
@@ -343,6 +369,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       })
       onAfterMutation?.()
     }
+    if (errors.length > 0) onMoveErrors?.(errors)
   }
 
   const renderDir = (path: string, depth: number): React.ReactNode => {

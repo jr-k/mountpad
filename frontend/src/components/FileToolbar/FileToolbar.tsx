@@ -47,6 +47,24 @@ interface FileToolbarProps {
   downloadCount?: number
   onDownload?: () => void
   /**
+   * Upload picks one or more local files and POSTs them into the
+   * current working directory. We expose `canUpload` separately so
+   * the parent can disable the button when there's no writable
+   * target (e.g. before a mount is selected, or while a file is
+   * open in the editor and no directory context is meaningful).
+   */
+  canUpload?: boolean
+  onUpload?: () => void
+  /**
+   * Extract surfaces only when the current single subject (active
+   * file or single selected entry) looks like an archive the
+   * backend knows how to handle (.zip, .tar, .tar.gz, .tgz,
+   * .tar.bz2, .tbz, .tbz2). The label includes the count to keep
+   * the button width stable.
+   */
+  canExtract?: boolean
+  onExtract?: () => void
+  /**
    * Number of entries the next Delete press would act on. When > 1,
    * the button surfaces the count ("Delete 5 items") so the user knows
    * the action is a bulk operation before they trigger the confirmation
@@ -107,6 +125,20 @@ const DownloadIcon = () => (
     <path d="M3 13h10" />
   </svg>
 )
+const UploadIcon = () => (
+  <svg {...iconProps}>
+    <path d="M8 13V5" />
+    <path d="M4.5 8L8 4.5 11.5 8" />
+    <path d="M3 3h10" />
+  </svg>
+)
+const ExtractIcon = () => (
+  <svg {...iconProps}>
+    <rect x="2.5" y="3.5" width="11" height="9" rx="1" />
+    <path d="M2.5 7h11" />
+    <path d="M6 10.5h4" />
+  </svg>
+)
 const RenameIcon = () => (
   <svg {...iconProps}>
     <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z" />
@@ -134,6 +166,8 @@ export const FileToolbar: React.FC<FileToolbarProps> = ({
   status, statusLabel, canSave, onSave, onRename, onDelete, onPermissions,
   canRename = false, canDelete = false, deleteCount = 1, onRenameLeaf,
   canDownload = false, downloadCount = 1, onDownload,
+  canUpload = false, onUpload,
+  canExtract = false, onExtract,
   showDetails, onToggleDetails,
 }) => (
   <S.FileToolbarRoot>
@@ -170,6 +204,18 @@ export const FileToolbar: React.FC<FileToolbarProps> = ({
       <Button size="sm" variant="secondary" onClick={onDownload}>
         <DownloadIcon />
         {downloadCount > 1 ? `Download ${downloadCount} items` : 'Download'}
+      </Button>
+    )}
+    {canUpload && (
+      <Button size="sm" variant="secondary" onClick={onUpload}>
+        <UploadIcon />
+        Upload
+      </Button>
+    )}
+    {canExtract && (
+      <Button size="sm" variant="secondary" onClick={onExtract}>
+        <ExtractIcon />
+        Extract
       </Button>
     )}
     {canRename && (

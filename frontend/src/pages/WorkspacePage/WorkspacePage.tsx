@@ -6,6 +6,8 @@ import { FileExplorer } from '@/components/FileExplorer'
 import { DirectoryView } from '@/components/DirectoryView'
 import { TextEditor } from '@/components/TextEditor'
 import { HexEditor } from '@/components/HexEditor'
+import { MediaPreview } from '@/components/MediaPreview'
+import type { MediaKind } from '@/components/MediaPreview'
 import { FileToolbar } from '@/components/FileToolbar'
 import { FileDetailsPanel } from '@/components/FileDetailsPanel'
 import { PermissionsPanel } from '@/components/PermissionsPanel'
@@ -17,6 +19,8 @@ import { LoadingState } from '@/components/LoadingState'
 import { WelcomeScreen } from '@/components/WelcomeScreen'
 import { StatusBarParts as SB } from '@/components/StatusBar'
 import { fsApi, HttpError } from '@/lib/api'
+import type { UploadFileResult } from '@/lib/api'
+import type { MoveError } from '@/lib/dnd'
 import { useDirty } from '@/hooks/useDirty'
 import { useSaveShortcut } from '@/hooks/useSaveShortcut'
 import type { FileEntry, MountPoint } from '@/types/files'
@@ -96,7 +100,19 @@ const WorkspacePage: React.FC = () => {
     return () => { cancelled = true }
   }, [rawMountPoints, markForbidden])
 
-  const [activeMount, setActiveMount] = useState<MountPoint | undefined>(undefined)
+  // Persist the active mount across Inertia page navigations (e.g.
+  // Workspace → Settings → Workspace). Without this, switching to
+  // the Access or Mounts page and coming back would lose the
+  // mount selection and dump the user on the first mount.
+  const MOUNT_KEY = 'mountpad:workspace:activeMount'
+  const [activeMount, setActiveMountRaw] = useState<MountPoint | undefined>(undefined)
+  const setActiveMount = useCallback((mp: MountPoint | undefined) => {
+    setActiveMountRaw(mp)
+    try {
+      if (mp) window.localStorage.setItem(MOUNT_KEY, String(mp.id))
+      else window.localStorage.removeItem(MOUNT_KEY)
+    } catch { /* quota */ }
+  }, [])
   const [activeDir, setActiveDir] = useState('')
   const [activeFile, setActiveFile] = useState<FileEntry | undefined>()
   // Tracks whether the URL → state restore has run; gates the inverse
@@ -118,6 +134,13 @@ const WorkspacePage: React.FC = () => {
   // the previous binary doesn't bleed into the next selection.
   const [binaryBytes, setBinaryBytes] = useState<Uint8Array | null>(null)
   const [binaryMeta, setBinaryMeta] = useState<{ size?: number; truncated?: boolean } | null>(null)
+  // mediaPreview short-circuits the hex view for binary files the
+  // browser can render natively (images, videos, audio, pdf). When
+  // set, the editor pane renders a <MediaPreview> pointed at the
+  // /raw endpoint instead of decoding the (potentially huge) file
+  // bytes through JSON+base64. Cleared whenever a non-media file
+  // takes over so a previous preview never bleeds into the next.
+  const [mediaPreview, setMediaPreview] = useState<{ kind: MediaKind; size?: number } | null>(null)
   // isSymlink is sourced from the Read response and flips the text
   // editor into read-only mode (the write endpoint won't mutate
   // through a symlink, so letting the user type would just queue a
@@ -233,14 +256,24 @@ const WorkspacePage: React.FC = () => {
       setIsSymlink(!!res.is_symlink || !!entry.is_symlink)
       if (res.is_binary) {
         // Text-editor state is cleared so a previous textual file
-        // doesn't leak into the hex view (and so `dirty` resolves
-        // to false: hex is read-only).
+        // doesn't leak into the binary view (and so `dirty` resolves
+        // to false: both hex and media previews are read-only).
         setContent('')
         setOrigContent('')
         setChecksum('')
         setMtime(res.modified_at)
         setStatus('idle')
         setStatusLabel('')
+        if (res.media_kind) {
+          // Media short-circuit: skip hex altogether. The component
+          // points at /raw, which streams the bytes with the right
+          // Content-Type so the browser renders it natively.
+          setBinaryBytes(null)
+          setBinaryMeta(null)
+          setMediaPreview({ kind: res.media_kind, size: res.size })
+          return
+        }
+        setMediaPreview(null)
         if (res.content_base64) {
           // atob → byte string → Uint8Array. Cheap and correct for
           // payloads under our 256 KiB server cap; for larger
@@ -256,10 +289,11 @@ const WorkspacePage: React.FC = () => {
         return
       }
       // Text path: clear any leftover binary preview from a prior
-      // selection so the hex view doesn't briefly flash before the
-      // text editor takes over.
+      // selection so the hex / media view doesn't briefly flash
+      // before the text editor takes over.
       setBinaryBytes(null)
       setBinaryMeta(null)
+      setMediaPreview(null)
       setContent(res.content ?? '')
       setOrigContent(res.content ?? '')
       setChecksum(res.checksum ?? '')
@@ -349,6 +383,162 @@ const WorkspacePage: React.FC = () => {
   // browser would otherwise navigate to when `<a download>` follows
   // a non-2xx response.
   const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  // ── Upload + drag-and-drop ──────────────────────────────────────────
+  // The Upload toolbar button proxies its click into a hidden file
+  // input; drag-and-drop on the main panel uses the same uploadFiles
+  // helper so both surfaces share the post-upload refresh, error
+  // dialog, and conflict handling.
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadSummary, setUploadSummary] = useState<{
+    results: UploadFileResult[]
+    targetDir: string
+  } | null>(null)
+  // dragCounter copes with the way HTML5 DnD fires dragenter/dragleave
+  // every time a drag crosses a child boundary. We track the net
+  // depth so the overlay stays on until the user has really left the
+  // panel, not just hovered over an inner element.
+  const dragCounter = useRef(0)
+  const [isDragging, setIsDragging] = useState(false)
+  // uploadTargetDir is the current working directory the upload will
+  // land in. We capture it as a memo so the overlay can echo the
+  // path back to the user before they drop.
+  const uploadTargetDir = activeDir
+  const canUpload = !!activeMount
+  const canDragDrop = canUpload
+
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+    if (!activeMount) return
+    const list = Array.from(files).filter((f) => f && f.name && f.name !== '.DS_Store')
+    if (list.length === 0) return
+    setUploading(true)
+    try {
+      const res = await fsApi(activeMount.id).upload(uploadTargetDir, list)
+      // Only surface a modal if there's something to report (errors,
+      // conflicts, or a multi-file batch). A single successful upload
+      // refreshes silently - the new entry appearing in the listing
+      // is feedback enough.
+      const hasIssue = res.files.some((f) => f.status !== 'uploaded')
+      if (hasIssue || res.files.length > 1) {
+        setUploadSummary({ results: res.files, targetDir: res.path })
+      }
+      setExplorerKey((k) => k + 1)
+    } catch (e: unknown) {
+      const body = e instanceof HttpError && e.body ? e.body : 'Upload failed.'
+      setUploadSummary({
+        results: list.map((f) => ({ name: f.name, status: 'error', error: body })),
+        targetDir: uploadTargetDir,
+      })
+    } finally {
+      setUploading(false)
+    }
+  }, [activeMount, uploadTargetDir])
+
+  const onPickFiles = useCallback(() => {
+    if (!fileInputRef.current) return
+    // Reset value first so re-selecting the same file fires the
+    // change event again. Without this, picking foo.txt twice in a
+    // row would only trigger the first upload.
+    fileInputRef.current.value = ''
+    fileInputRef.current.click()
+  }, [])
+
+  const onFileInputChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const fl = e.target.files
+    if (fl && fl.length > 0) void uploadFiles(fl)
+  }
+
+  // Drag handlers attached to the main panel wrapper. We only react
+  // when the drag actually carries files (not when it's a text/uri
+  // drag from elsewhere in the page), and we always preventDefault
+  // on the events so the browser doesn't navigate to the dropped
+  // file when it lands.
+  const dragCarriesFiles = (e: React.DragEvent) => {
+    const types = e.dataTransfer?.types
+    if (!types) return false
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === 'Files') return true
+    }
+    return false
+  }
+  const onDragEnter: React.DragEventHandler = (e) => {
+    if (!canDragDrop || !dragCarriesFiles(e)) return
+    e.preventDefault()
+    dragCounter.current += 1
+    if (dragCounter.current === 1) setIsDragging(true)
+  }
+  const onDragOver: React.DragEventHandler = (e) => {
+    if (!canDragDrop || !dragCarriesFiles(e)) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }
+  const onDragLeave: React.DragEventHandler = (e) => {
+    if (!canDragDrop || !dragCarriesFiles(e)) return
+    e.preventDefault()
+    dragCounter.current = Math.max(0, dragCounter.current - 1)
+    if (dragCounter.current === 0) setIsDragging(false)
+  }
+  const onDrop: React.DragEventHandler = (e) => {
+    if (!canDragDrop) return
+    e.preventDefault()
+    dragCounter.current = 0
+    setIsDragging(false)
+    const files = e.dataTransfer?.files
+    if (files && files.length > 0) void uploadFiles(files)
+  }
+
+  // ── Extract ─────────────────────────────────────────────────────────
+  // The Extract button surfaces when the current single subject (a
+  // single-selection in the directory view OR the open file in the
+  // editor) is one of the archive formats the backend can unpack.
+  // Detection is extension-based and case-insensitive to match the
+  // server.
+  const archiveExtensions = ['.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tbz2']
+  const isArchiveName = (name: string): boolean => {
+    const lower = name.toLowerCase()
+    return archiveExtensions.some((ext) => lower.endsWith(ext))
+  }
+  const extractTarget = useMemo<FileEntry | null>(() => {
+    if (selectedEntries.length === 1 && !selectedEntries[0].is_dir && isArchiveName(selectedEntries[0].name)) {
+      return selectedEntries[0]
+    }
+    if (activeFile && !activeFile.is_dir && isArchiveName(activeFile.name)) {
+      return activeFile
+    }
+    return null
+  // archiveExtensions is a const reference so it's fine to omit; the
+  // hooks-deps lint would also reject mutable arrays anyway.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEntries, activeFile])
+  const canExtract = !!extractTarget && !uploading
+  const [extractError, setExtractError] = useState<string | null>(null)
+
+  // moveErrors collects per-entry rename failures bubbled up from
+  // every drag-and-drop site (DirectoryView rows, FileExplorer
+  // sidebar). Most common cause: a name collision in the destination
+  // folder (backend rename refuses to clobber, returns 409). Without
+  // this modal the drop would just silently no-op, leaving the user
+  // wondering why nothing moved.
+  const [moveErrors, setMoveErrors] = useState<MoveError[] | null>(null)
+  const [extracting, setExtracting] = useState(false)
+  const triggerExtract = useCallback(async () => {
+    if (!activeMount || !extractTarget) return
+    setExtracting(true)
+    setExtractError(null)
+    try {
+      await fsApi(activeMount.id).extract(extractTarget.path)
+      setExplorerKey((k) => k + 1)
+    } catch (e: unknown) {
+      const body = e instanceof HttpError && e.body ? e.body : ''
+      const msg = body
+        ? `Extract failed: ${body}.`
+        : 'Extract failed. The archive may be malformed or the destination already exists.'
+      setExtractError(msg)
+    } finally {
+      setExtracting(false)
+    }
+  }, [activeMount, extractTarget])
   const triggerDownload = useCallback(async () => {
     if (!activeMount || downloadSubjects.length === 0) return
     const paths = downloadSubjects.map((e) => e.path)
@@ -625,35 +815,38 @@ const WorkspacePage: React.FC = () => {
     }
   }, [openFile])
 
-  // 1. Initial restore: parse the URL once we have the mount list. If the
-  //    URL is empty or references an unknown slug, fall back to the first
-  //    available mount so the workspace is never blank by accident.
+  // 1. Initial restore: parse the URL once we have the mount list.
+  //    Priority chain:
+  //      a. URL slug - explicit deep link takes precedence.
+  //      b. localStorage saved mount - restores the "last active"
+  //         when the user navigates back from Settings.
+  //      c. First available mount - so the workspace is never blank.
   useEffect(() => {
     if (urlInitialized.current || mountPoints.length === 0) return
     urlInitialized.current = true
 
     const { slug, path } = parseUrl()
-    const mount = (slug && mountPoints.find((m) => m.slug === slug)) || mountPoints[0]
+    let mount: MountPoint | undefined
+    if (slug) mount = mountPoints.find((m) => m.slug === slug)
+    if (!mount) {
+      try {
+        const savedId = window.localStorage.getItem(MOUNT_KEY)
+        if (savedId) mount = mountPoints.find((m) => m.id === Number(savedId))
+      } catch { /* storage unavailable */ }
+    }
+    if (!mount) mount = mountPoints[0]
     if (!mount) return
     setActiveMount(mount)
     if (path) void restoreFromUrl(mount, path)
-  }, [mountPoints, parseUrl, restoreFromUrl])
+  }, [mountPoints, parseUrl, restoreFromUrl, setActiveMount])
 
-  // 2. Reflect every state change back into the URL, *pushing* a history
-  //    entry per navigation so the browser back / forward buttons walk
-  //    through explorer states instead of jumping back to the previous
-  //    page. Two refinements keep history readable:
-  //      a. The first sync after the URL → state restore uses
-  //         `replaceState`, not push. This avoids polluting the stack
-  //         with a synthetic "go here" entry on landing.
-  //      b. The state → URL push is debounced (≈60 ms) so a single user
-  //         action that updates several pieces of state (mount + dir +
-  //         file from `restoreFromUrl`, for instance) collapses into one
-  //         history entry, not three.
-  //      c. When a `popstate` brings the URL back to a target our state
-  //         is converging towards, the equality check below short-circuits
-  //         the sync - no spurious push, no recursive loop.
+  // 2. Push a history entry for every in-workspace navigation so that
+  //    the browser back / forward buttons walk through explorer states.
+  //    We preserve `window.history.state` (Inertia's page descriptor)
+  //    so that popstate on these entries still lets Inertia render the
+  //    correct page component.
   const firstUrlSyncDone = useRef(false)
+  const popNavigation = useRef(false)
   useEffect(() => {
     if (!urlInitialized.current) return
     const t = window.setTimeout(() => {
@@ -663,39 +856,36 @@ const WorkspacePage: React.FC = () => {
         firstUrlSyncDone.current = true
         return
       }
-      if (firstUrlSyncDone.current) {
-        window.history.pushState(null, '', target)
-      } else {
-        window.history.replaceState(null, '', target)
+      if (!firstUrlSyncDone.current || popNavigation.current) {
+        window.history.replaceState(window.history.state, '', target)
         firstUrlSyncDone.current = true
+        popNavigation.current = false
+      } else {
+        window.history.pushState(window.history.state, '', target)
       }
     }, 60)
     return () => window.clearTimeout(t)
   }, [activeMount, activeFile, activeDir, buildUrl])
 
-  // 2b. Browser back / forward → re-parse the URL and reconcile the
-  //     workspace state. The sync effect (2) is debounced + does an
-  //     equality check against `window.location.pathname`, so it stays
-  //     quiet while we drive state from `popstate`: the popped URL is
-  //     already the URL we'd otherwise have written.
-  //
-  //     We deliberately ignore popstates that land outside `/workspace`
-  //     because that means the user navigated back to a different page
-  //     entirely (Settings, Profile…) and Inertia will swap the page
-  //     component for us; touching local state would only race with the
-  //     unmount.
+  // 2b. Browser back / forward - re-parse the popped URL and reconcile
+  //     workspace state. We flag `popNavigation` so effect (2) uses
+  //     replaceState instead of pushing yet another entry.
   useEffect(() => {
     if (!urlInitialized.current) return
     const onPop = () => {
       if (!window.location.pathname.startsWith('/workspace')) return
+      popNavigation.current = true
       const { slug, path } = parseUrl()
-      const mount = slug ? mountPoints.find((m) => m.slug === slug) : undefined
+      let mount: MountPoint | undefined
+      if (slug) mount = mountPoints.find((m) => m.slug === slug)
       if (!mount) {
-        setActiveMount(undefined)
-        setActiveFile(undefined)
-        setActiveDir('')
-        return
+        try {
+          const savedId = window.localStorage.getItem(MOUNT_KEY)
+          if (savedId) mount = mountPoints.find((m) => m.id === Number(savedId))
+        } catch { /* storage unavailable */ }
       }
+      if (!mount) mount = mountPoints[0]
+      if (!mount) return
       if (mount.id !== activeMount?.id) {
         setActiveMount(mount)
       }
@@ -708,7 +898,7 @@ const WorkspacePage: React.FC = () => {
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [mountPoints, parseUrl, restoreFromUrl, activeMount])
+  }, [mountPoints, parseUrl, restoreFromUrl, activeMount, setActiveMount])
 
   // 3. If the active mount just got marked as forbidden, fall back to the
   //    next visible one (or clear the workspace if none are left). Without
@@ -830,6 +1020,10 @@ const WorkspacePage: React.FC = () => {
                  same refresh path as every other mutation, so the
                  source listing AND the destination tree both re-fetch. */
               onAfterMutation={() => setExplorerKey((k) => k + 1)}
+              /* Failures (name collision, permission denied, …)
+                 bubble up here so the user gets a real modal
+                 instead of a silent no-op. */
+              onMoveErrors={setMoveErrors}
               /* Carry the rename across the refresh so the sidebar's
                  persisted expanded-folders set follows the new path
                  instead of stranding the user with a snapped-shut
@@ -840,7 +1034,12 @@ const WorkspacePage: React.FC = () => {
           ) : null
         }
         main={
-          <>
+          <S.MainPanel
+            onDragEnter={onDragEnter}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
             <FileToolbar
               /* Hand the toolbar both the location and whether it points
                  at an editable file so its breadcrumb stays accurate
@@ -863,6 +1062,10 @@ const WorkspacePage: React.FC = () => {
               canDownload={canDownload}
               downloadCount={downloadSubjects.length}
               onDownload={triggerDownload}
+              canUpload={canUpload && !uploading}
+              onUpload={onPickFiles}
+              canExtract={canExtract}
+              onExtract={triggerExtract}
               /* The pencil on the breadcrumb leaf renames whatever
                  the workspace is currently *parked on*: the open
                  file in editor mode, the active folder in listing
@@ -872,6 +1075,7 @@ const WorkspacePage: React.FC = () => {
               showDetails={showDetails}
               onToggleDetails={toggleDetails}
             />
+            <S.HiddenFileInput ref={fileInputRef} onChange={onFileInputChange} />
             <S.MainBody>
               <S.EditorWrap>
                 {loadingFile ? <LoadingState label="Loading file…" />
@@ -914,22 +1118,39 @@ const WorkspacePage: React.FC = () => {
                            bar: visible (post-hidden-filter) vs.
                            total raw count from the backend. */
                         onCountsChange={setDirCounts}
+                        /* Backspace / Delete keyboard shortcut routes
+                           into the same dialog as the toolbar button -
+                           openDeleteDialog reads `deleteSubjects`
+                           which already prefers the live selection. */
+                        onDeleteShortcut={() => openDeleteDialog()}
+                        /* Drag-and-drop refusals (name collision,
+                           permission denied, …) land here so the
+                           shared modal can explain what went wrong
+                           instead of leaving the drop silent. */
+                        onMoveErrors={setMoveErrors}
                       />
                     )
                   : activeFile && !activeFile.is_dir
-                    ? (binaryBytes
-                        ? <HexEditor bytes={binaryBytes} totalSize={binaryMeta?.size} truncated={binaryMeta?.truncated} />
-                        : <TextEditor
-                            value={content}
-                            onChange={setContent}
-                            status={statusLabel}
-                            fileName={activeFile.path}
-                            readOnly={isSymlink}
-                            readOnlyReason={isSymlink ? {
-                              title: 'Symbolic link - read-only',
-                              body: 'This file is a symbolic link. Editing through a symlink would silently overwrite whatever it points at, so MountPad lets you read the target content but not save back. Open the target file directly to make changes.',
-                            } : undefined}
-                          />)
+                    ? (mediaPreview && activeMount
+                        ? <MediaPreview
+                            src={fsApi(activeMount.id).rawUrl(activeFile.path)}
+                            fileName={activeFile.name}
+                            kind={mediaPreview.kind}
+                            size={mediaPreview.size}
+                          />
+                        : binaryBytes
+                          ? <HexEditor bytes={binaryBytes} totalSize={binaryMeta?.size} truncated={binaryMeta?.truncated} />
+                          : <TextEditor
+                              value={content}
+                              onChange={setContent}
+                              status={statusLabel}
+                              fileName={activeFile.path}
+                              readOnly={isSymlink}
+                              readOnlyReason={isSymlink ? {
+                                title: 'Symbolic link - read-only',
+                                body: 'This file is a symbolic link. Editing through a symlink would silently overwrite whatever it points at, so MountPad lets you read the target content but not save back. Open the target file directly to make changes.',
+                              } : undefined}
+                            />)
                     : <EmptyState title="Open a file" description="Select a file in the explorer to start editing." />
                 }
               </S.EditorWrap>
@@ -944,7 +1165,22 @@ const WorkspacePage: React.FC = () => {
                 </>
               )}
             </S.MainBody>
-          </>
+            {isDragging && (
+              <S.DropOverlay>
+                <S.DropCallout>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <path d="M12 17V5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M5 12l7-7 7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                  Drop files to upload
+                  <div className="target">
+                    {activeMount?.name}{uploadTargetDir ? `/${uploadTargetDir}` : ''}
+                  </div>
+                </S.DropCallout>
+              </S.DropOverlay>
+            )}
+          </S.MainPanel>
         }
       />
 
@@ -1003,9 +1239,18 @@ const WorkspacePage: React.FC = () => {
             open={confirmDelete}
             title={title}
             onClose={closeDeleteDialog}
+            /* onSubmit lets Enter trigger the delete from anywhere
+               inside the modal - the hidden submit button on the
+               wrapping <form> catches the keypress even when focus
+               sits on the "recursive" checkbox or wandered off. */
+            onSubmit={() => { if (n > 0) submitDelete() }}
             footer={<>
               <Button variant="ghost" onClick={closeDeleteDialog}>Cancel</Button>
-              <Button variant="danger" onClick={submitDelete} disabled={n === 0}>{confirmLabel}</Button>
+              {/* autoFocus visibly lands on the action button when
+                  the modal opens (so the user sees what Enter is
+                  about to do) and gives the common "open → press
+                  Enter" gesture an obvious target. */}
+              <Button variant="danger" autoFocus onClick={submitDelete} disabled={n === 0}>{confirmLabel}</Button>
             </>}
           >
             <S.DeleteMessage>
@@ -1079,6 +1324,99 @@ const WorkspacePage: React.FC = () => {
       >
         <S.DownloadError>{downloadError}</S.DownloadError>
       </Modal>
+
+      {/* Upload summary: only shown when something is worth reporting
+          (errors, conflicts, multi-file batches). A single successful
+          upload refreshes silently because the new entry's arrival in
+          the listing is feedback enough. */}
+      <Modal
+        open={!!uploadSummary}
+        title="Upload results"
+        onClose={() => setUploadSummary(null)}
+        footer={
+          <Button variant="primary" onClick={() => setUploadSummary(null)}>Close</Button>
+        }
+      >
+        {uploadSummary && (() => {
+          const ok = uploadSummary.results.filter((r) => r.status === 'uploaded').length
+          const conflict = uploadSummary.results.filter((r) => r.status === 'conflict').length
+          const err = uploadSummary.results.filter((r) => r.status === 'error').length
+          return (
+            <>
+              <S.DeleteMessage>
+                Uploaded to <code>/{uploadSummary.targetDir || ''}</code>:
+                <br />
+                <strong>{ok}</strong> succeeded
+                {conflict > 0 && <>, <strong>{conflict}</strong> already existed</>}
+                {err > 0 && <>, <strong>{err}</strong> failed</>}.
+              </S.DeleteMessage>
+              <S.UploadList>
+                {uploadSummary.results.map((r, i) => {
+                  const cls = r.status === 'uploaded' ? 'ok' : r.status === 'conflict' ? 'warn' : 'err'
+                  const icon = r.status === 'uploaded' ? '✓' : r.status === 'conflict' ? '!' : '✕'
+                  return (
+                    <li key={`${r.name}-${i}`} className={cls} title={r.error || r.name}>
+                      <span aria-hidden style={{ minWidth: 14, textAlign: 'center' }}>{icon}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {r.name}
+                        {r.error && <> - <em>{r.error}</em></>}
+                      </span>
+                    </li>
+                  )
+                })}
+              </S.UploadList>
+            </>
+          )
+        })()}
+      </Modal>
+
+      <Modal
+        open={!!extractError}
+        title="Extract failed"
+        onClose={() => setExtractError(null)}
+        footer={
+          <Button variant="primary" onClick={() => setExtractError(null)}>OK</Button>
+        }
+      >
+        <S.DownloadError>{extractError}</S.DownloadError>
+      </Modal>
+
+      <Modal
+        open={!!moveErrors && moveErrors.length > 0}
+        title={
+          moveErrors && moveErrors.length === 1
+            ? 'Move not performed'
+            : `${moveErrors?.length ?? 0} items could not be moved`
+        }
+        onClose={() => setMoveErrors(null)}
+        footer={<Button variant="primary" onClick={() => setMoveErrors(null)}>OK</Button>}
+      >
+        {moveErrors && moveErrors.length === 1 ? (
+          <S.DownloadError>{moveErrors[0].reason}</S.DownloadError>
+        ) : (
+          <>
+            <S.DownloadError>
+              The following items could not be moved into the destination folder:
+            </S.DownloadError>
+            <S.UploadList>
+              {(moveErrors ?? []).map((e) => {
+                const name = e.path.includes('/')
+                  ? e.path.slice(e.path.lastIndexOf('/') + 1)
+                  : e.path
+                return (
+                  <li key={e.path}>
+                    <strong>{name}</strong> - <em>{e.reason}</em>
+                  </li>
+                )
+              })}
+            </S.UploadList>
+          </>
+        )}
+      </Modal>
+
+      {extracting && null /* placeholder for future busy spinner; the
+        button itself disables via canExtract during the in-flight
+        call, so a global modal isn't necessary right now. */}
     </>
   )
 }

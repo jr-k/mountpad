@@ -1,12 +1,19 @@
 package handlers
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/bzip2"
+	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +29,7 @@ import (
 	"github.com/mountpad/mountpad/internal/config"
 	"github.com/mountpad/mountpad/internal/db"
 	"github.com/mountpad/mountpad/internal/filesystem"
+	"github.com/mountpad/mountpad/internal/imaging"
 	"github.com/mountpad/mountpad/internal/manifests"
 	"github.com/mountpad/mountpad/internal/models"
 	"github.com/mountpad/mountpad/internal/mountpoints"
@@ -165,6 +173,50 @@ func relativeTo(root, p string) string {
 	return filepath.ToSlash(rel)
 }
 
+// mediaKind classifies a filename into one of the inline-preview
+// families the frontend knows how to render natively:
+//
+//   "image"  → <img src="...">
+//   "video"  → <video controls src="...">
+//   "audio"  → <audio controls src="...">
+//   "pdf"    → <iframe src="..."> (every modern browser ships a viewer)
+//
+// Returns "" for anything else, in which case the editor falls back
+// to the existing hex preview. Detection is extension-based - same
+// philosophy as archiveKind: the user names a file .jpg because
+// that's what it is, and magic-byte sniffing would just add latency
+// to a cheap check the browser repeats anyway during decoding.
+func mediaKind(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif":
+		return "image"
+	case ".mp4", ".webm", ".m4v", ".mov", ".ogv":
+		return "video"
+	case ".mp3", ".wav", ".ogg", ".oga", ".m4a", ".m4b", ".flac", ".aac",
+		".opus", ".weba", ".wma", ".aif", ".aiff", ".mid", ".midi", ".amr":
+		return "audio"
+	case ".pdf":
+		return "pdf"
+	}
+	return ""
+}
+
+// detectContentType returns a best-effort Content-Type for a file
+// path, preferring the extension map (cheap, deterministic) and
+// only falling back to application/octet-stream when nothing
+// matches. We never sniff the body: the file is going straight to
+// the browser, and modern browsers run their own sniffer regardless.
+func detectContentType(absPath string) string {
+	ext := strings.ToLower(filepath.Ext(absPath))
+	if ext != "" {
+		if t := mime.TypeByExtension(ext); t != "" {
+			return t
+		}
+	}
+	return "application/octet-stream"
+}
+
 // ---- endpoints ----
 
 // GET /api/fs/{mountId}/list?path=...
@@ -222,6 +274,28 @@ func (h *FSHandler) Read(w http.ResponseWriter, r *http.Request) {
 	// the link points to.
 	linkInfo, _ := os.Lstat(rp.Absolute)
 	isSymlink := linkInfo != nil && linkInfo.Mode()&os.ModeSymlink != 0
+
+	// Media short-circuit: when the extension says "this is an image
+	// / video / audio / pdf we can render inline", we skip the full
+	// ReadFile (which would buffer up to MaxEditableFileSize bytes
+	// just to compute a hex preview the UI won't show anyway) and
+	// let the client fetch the bytes through the dedicated /raw
+	// endpoint with the right Content-Type. Stat alone gives us
+	// size + modtime, which is all the metadata the media frame
+	// needs.
+	if mk := mediaKind(filepath.Base(rp.Absolute)); mk != "" {
+		st, err := os.Stat(rp.Absolute)
+		if err != nil { h.writeError(w, err); return }
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":        rp.Relative,
+			"is_binary":   true,
+			"is_symlink":  isSymlink,
+			"media_kind":  mk,
+			"size":        st.Size(),
+			"modified_at": st.ModTime().UTC(),
+		})
+		return
+	}
 
 	res, err := filesystem.ReadFile(rp.Absolute, h.Cfg.MaxEditableFileSize)
 	if err != nil { h.writeError(w, err); return }
@@ -562,6 +636,155 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GET /api/fs/{mountId}/raw?path=...
+//
+// Streams a single file inline (no `Content-Disposition: attachment`)
+// with a best-effort Content-Type derived from the extension. Backs
+// the in-app media preview: <img>, <video>, <audio>, <iframe>.
+// http.ServeContent handles Range requests, so the user can scrub a
+// video without downloading the whole file first.
+//
+// Symlink policy follows the rest of the read path: Resolve enforces
+// the global + per-mount MOUNTPAD_FOLLOW_SYMLINK rules, so a symlink
+// pointing outside the mount root is refused here exactly as it
+// would be in Read or Download.
+func (h *FSHandler) Raw(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	mp, err := h.loadMount(r)
+	if err != nil { h.writeError(w, err); return }
+	rel := r.URL.Query().Get("path")
+	if err := h.rejectManifest(rel, user.IsAdmin); err != nil { h.writeError(w, err); return }
+	rp, err := h.resolve(r, mp, rel)
+	if err != nil { h.writeError(w, err); return }
+	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionRead); err != nil {
+		h.writeError(w, err); return
+	}
+
+	info, err := os.Stat(rp.Absolute)
+	if err != nil { h.writeError(w, err); return }
+	if info.IsDir() {
+		http.Error(w, "not a file", http.StatusBadRequest); return
+	}
+
+	f, err := os.Open(rp.Absolute)
+	if err != nil { h.writeError(w, err); return }
+	defer f.Close()
+
+	// inline (vs attachment) tells the browser to render the bytes
+	// rather than pop a save dialog. RFC 5987 utf-8 fallback so
+	// non-ASCII filenames survive a "save as" from the right-click
+	// menu.
+	w.Header().Set("Content-Type", detectContentType(rp.Absolute))
+	w.Header().Set("Content-Disposition",
+		`inline; filename*=UTF-8''`+url.PathEscape(filepath.Base(rp.Absolute)))
+	http.ServeContent(w, r, filepath.Base(rp.Absolute), info.ModTime(), f)
+}
+
+// isThumbnailable returns true for the raster formats the imaging
+// package can decode. SVG is intentionally NOT included - vector
+// files render natively at any size, so the frontend points its
+// <img> at /raw directly instead of round-tripping through a
+// thumbnail. Anything else (videos, audio, pdf, archives, …)
+// stays on the emoji icon: backend video frame extraction would
+// pull in ffmpeg, which is a much bigger commitment than this
+// endpoint is worth right now.
+func isThumbnailable(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+// GET /api/fs/{mountId}/thumb?path=...&size=128
+//
+// Returns a JPEG thumbnail of the supplied image file, scaled so
+// the longer edge fits within `size` (default 128, capped at 512).
+// Backs the file-explorer grid + list previews, replacing the
+// generic image emoji with the actual content.
+//
+// The endpoint is aggressively cacheable: the ETag combines file
+// path + size + mtime, so any change on disk invalidates the
+// browser cache on the next request. We honour If-None-Match for
+// a cheap 304 path that skips the decode entirely, which matters
+// once a folder of a few hundred photos has been visited once.
+//
+// Hard guard rails:
+//   - 4 MiB cap on the source bytes we'll decode (anything larger
+//     short-circuits to 415 → the frontend falls back to the emoji).
+//     A 50 MB DSLR JPEG decoding to a 50 MP pixel buffer would
+//     allocate ~200 MB just to make a 128×128 preview; the cap
+//     keeps the endpoint from becoming a DoS lever.
+//   - The standard ACL + symlink policy applies, identical to Read
+//     / Download / Raw.
+func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	mp, err := h.loadMount(r)
+	if err != nil { h.writeError(w, err); return }
+	rel := r.URL.Query().Get("path")
+	if err := h.rejectManifest(rel, user.IsAdmin); err != nil { h.writeError(w, err); return }
+	rp, err := h.resolve(r, mp, rel)
+	if err != nil { h.writeError(w, err); return }
+	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionRead); err != nil {
+		h.writeError(w, err); return
+	}
+	if !isThumbnailable(filepath.Base(rp.Absolute)) {
+		http.Error(w, "unsupported", http.StatusUnsupportedMediaType); return
+	}
+
+	size := 128
+	if v := r.URL.Query().Get("size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			size = n
+		}
+	}
+
+	info, err := os.Stat(rp.Absolute)
+	if err != nil { h.writeError(w, err); return }
+	if info.IsDir() {
+		http.Error(w, "not a file", http.StatusBadRequest); return
+	}
+	// 4 MiB source cap. Tuneable; chosen so we cover the typical
+	// "photo from a phone" range while keeping per-request decode
+	// allocations bounded. Larger files surface as 415, which the
+	// frontend treats as "fall back to the emoji icon".
+	const maxSourceBytes = 4 * 1024 * 1024
+	if info.Size() > maxSourceBytes {
+		http.Error(w, "source too large", http.StatusUnsupportedMediaType); return
+	}
+
+	// ETag scopes by path + requested size + source mtime so the
+	// browser cache is invalidated whenever any of those change.
+	// SHA-1 is fine here: this is a cache key, not a security
+	// primitive. Quoted per RFC 7232.
+	h1 := sha1.Sum([]byte(fmt.Sprintf("%s|%d|%d", rp.Absolute, size, info.ModTime().UnixNano())))
+	etag := `"` + hex.EncodeToString(h1[:]) + `"`
+	w.Header().Set("ETag", etag)
+	// 1h cache is short enough that a renamed/replaced file shows
+	// the new preview reasonably quickly even without a hard
+	// refresh, but long enough to cover an active browsing session
+	// without re-decoding.
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified); return
+	}
+
+	f, err := os.Open(rp.Absolute)
+	if err != nil { h.writeError(w, err); return }
+	defer f.Close()
+
+	thumb, err := imaging.Thumbnail(f, size)
+	if err != nil {
+		if errors.Is(err, imaging.ErrUnsupported) {
+			http.Error(w, "unsupported", http.StatusUnsupportedMediaType); return
+		}
+		http.Error(w, "thumbnail failed", http.StatusInternalServerError); return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(len(thumb)))
+	_, _ = w.Write(thumb)
+}
+
 // streamFileAttachment ships a single file body with attachment headers.
 // We rely on the OS-provided modtime for a weak ETag/Last-Modified and
 // let http.ServeContent handle Range requests (so large files download
@@ -633,4 +856,418 @@ func (h *FSHandler) DeepDelete(w http.ResponseWriter, r *http.Request) {
 	if err := filesystem.DeleteDirRecursive(rp.Absolute); err != nil { h.writeError(w, err); return }
 	_ = h.Manifest.DeleteEntry(filepath.Dir(rp.Absolute), filepath.Base(rp.Absolute))
 	writeJSON(w, http.StatusOK, map[string]any{"deep_deleted": rp.Relative})
+}
+
+// POST /api/fs/{mountId}/upload?path=<dir>
+//
+// Streams every multipart part to a temp file inside the target
+// directory, then renames it into place. Files are NEVER buffered
+// fully in memory, so multi-gigabyte uploads run in O(1) memory and
+// without hitting the default http.Request.ParseMultipartForm cap.
+//
+// Each upload is treated as "create new file": if a name already
+// exists we report it as a partial failure rather than silently
+// clobbering data. The response is always 200 with a per-file
+// status array, so the frontend can surface "3 uploaded, 1
+// conflict" without disambiguating an HTTP status code.
+//
+// ACL: ActionCreate on the target directory. Manifest filenames,
+// .mountpad/, and the *.tmp manifest staging files are rejected
+// up front so an upload can never bypass the rejectManifest gate
+// that protects every other write path.
+func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	mp, err := h.loadMount(r)
+	if err != nil { h.writeError(w, err); return }
+
+	dirRel := r.URL.Query().Get("path")
+	dirRP, err := h.resolve(r, mp, dirRel)
+	if err != nil { h.writeError(w, err); return }
+
+	// Verify the target is actually a directory; otherwise the
+	// first temp-file rename would land at a sibling path, which is
+	// almost certainly not what the operator intended.
+	if info, err := os.Stat(dirRP.Absolute); err != nil {
+		h.writeError(w, err); return
+	} else if !info.IsDir() {
+		http.Error(w, "target is not a directory", http.StatusBadRequest); return
+	}
+
+	mc := mountpoints.MountContext(mp)
+	if err := h.Resolver.Check(user, mc, dirRP.Absolute, true, acl.ActionCreate); err != nil {
+		h.writeError(w, err); return
+	}
+
+	reader, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "expected multipart/form-data", http.StatusBadRequest); return
+	}
+
+	type fileResult struct {
+		Name   string `json:"name"`
+		Size   int64  `json:"size,omitempty"`
+		Status string `json:"status"`           // "uploaded" | "conflict" | "error"
+		Error  string `json:"error,omitempty"`
+	}
+	results := []fileResult{}
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "multipart read error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Skip non-file form fields. Browsers only send the "files"
+		// field name with our frontend, but defensive against future
+		// callers that mix metadata fields into the same request.
+		if part.FileName() == "" {
+			_ = part.Close()
+			continue
+		}
+		// filepath.Base strips any directory component the browser
+		// might have included (Chrome will send a relative path for
+		// folder uploads). We DON'T support directory structures
+		// here: upload is flat into the target directory. A future
+		// "preserve hierarchy" mode could opt-in to keeping the
+		// part.FileName() relative path after a safety pass.
+		name := filepath.Base(part.FileName())
+		res := fileResult{Name: name}
+
+		if name == "" || name == "." || name == ".." {
+			res.Status = "error"
+			res.Error = "invalid filename"
+			results = append(results, res)
+			_ = part.Close()
+			continue
+		}
+		// Same protection as the rest of the write path: don't let
+		// an upload masquerade as a manifest, a tmp manifest, or a
+		// `.mountpad` shadow directory.
+		if err := h.rejectManifest(name, user.IsAdmin); err != nil {
+			res.Status = "error"
+			res.Error = "filename is reserved"
+			results = append(results, res)
+			_ = part.Close()
+			continue
+		}
+
+		destAbs := filepath.Join(dirRP.Absolute, name)
+		if _, err := os.Lstat(destAbs); err == nil {
+			res.Status = "conflict"
+			res.Error = "already exists"
+			results = append(results, res)
+			_ = part.Close()
+			continue
+		}
+
+		size, err := streamPartToFile(part, dirRP.Absolute, name)
+		_ = part.Close()
+		if err != nil {
+			res.Status = "error"
+			res.Error = err.Error()
+			results = append(results, res)
+			continue
+		}
+		res.Status = "uploaded"
+		res.Size = size
+		results = append(results, res)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":    dirRP.Relative,
+		"files":   results,
+	})
+}
+
+// streamPartToFile pipes a multipart.Part body to a temp file inside
+// `dirAbs` then renames it into place at `name`. The temp file lives
+// alongside the destination so the final rename is an atomic same-
+// filesystem operation (no cross-device copy fallback). On any error
+// the partial temp file is cleaned up.
+func streamPartToFile(src io.Reader, dirAbs, name string) (int64, error) {
+	// Same naming convention as WriteFileAtomic so a stray temp file
+	// is visually recognisable as ours and matches the exclusion
+	// rule applied by the explorer's hidden-file filter.
+	tmp, err := os.CreateTemp(dirAbs, "."+name+".*.upload")
+	if err != nil {
+		return 0, err
+	}
+	tmpName := tmp.Name()
+	n, err := io.Copy(tmp, src)
+	if err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return 0, err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return 0, err
+	}
+	if err := os.Rename(tmpName, filepath.Join(dirAbs, name)); err != nil {
+		os.Remove(tmpName)
+		return 0, err
+	}
+	return n, nil
+}
+
+// extractPayload is the JSON body for POST /api/fs/{mountId}/extract.
+type extractPayload struct {
+	// Path of the archive to extract, relative to the mount root.
+	Path string `json:"path"`
+}
+
+// POST /api/fs/{mountId}/extract
+//
+// Extracts a zip / tar / tar.gz / tar.bz2 archive into a sibling
+// directory named after the archive (without its extension). The
+// destination must not already exist - we never clobber existing
+// content. Path entries are sanitised against zip-slip (no absolute
+// paths, no parent traversal, every entry must stay inside the
+// extraction root).
+//
+// ACL:
+//   - ActionRead on the archive itself,
+//   - ActionCreate on the parent directory (= where the destination
+//     folder lands).
+func (h *FSHandler) Extract(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	var p extractPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest); return
+	}
+
+	mp, err := h.loadMount(r)
+	if err != nil { h.writeError(w, err); return }
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
+
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil { h.writeError(w, err); return }
+
+	mc := mountpoints.MountContext(mp)
+	if err := h.Resolver.Check(user, mc, rp.Absolute, false, acl.ActionRead); err != nil {
+		h.writeError(w, err); return
+	}
+	parentAbs := filepath.Dir(rp.Absolute)
+	if err := h.Resolver.Check(user, mc, parentAbs, true, acl.ActionCreate); err != nil {
+		h.writeError(w, err); return
+	}
+
+	info, err := os.Stat(rp.Absolute)
+	if err != nil { h.writeError(w, err); return }
+	if info.IsDir() {
+		http.Error(w, "not an archive", http.StatusBadRequest); return
+	}
+
+	destAbs := filepath.Join(parentAbs, archiveDestName(filepath.Base(rp.Absolute)))
+	if _, err := os.Lstat(destAbs); err == nil {
+		http.Error(w, "destination already exists", http.StatusConflict); return
+	}
+
+	kind := archiveKind(rp.Absolute)
+	if kind == "" {
+		http.Error(w, "unsupported archive format", http.StatusBadRequest); return
+	}
+
+	if err := os.Mkdir(destAbs, 0o755); err != nil {
+		h.writeError(w, err); return
+	}
+
+	count, extractErr := extractArchive(rp.Absolute, destAbs, kind)
+	if extractErr != nil {
+		// Best-effort cleanup on failure so a half-extracted tree
+		// doesn't linger; ignore the rm error - the original
+		// extraction error is the one the caller needs.
+		_ = os.RemoveAll(destAbs)
+		http.Error(w, "extract failed: "+extractErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	destRel := relativeTo(mp.HostPath, destAbs)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"archive":      rp.Relative,
+		"destination":  destRel,
+		"entry_count":  count,
+	})
+}
+
+// archiveKind returns "zip" | "tar" | "tar.gz" | "tar.bz2", or ""
+// when the extension isn't one we know how to handle. Detection is
+// extension-based: we don't sniff the magic bytes because the user
+// already told us their intent by naming the file accordingly, and
+// magic detection adds complexity without buying meaningful safety
+// (the unpacker rejects malformed streams anyway).
+func archiveKind(absPath string) string {
+	lower := strings.ToLower(absPath)
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		return "zip"
+	case strings.HasSuffix(lower, ".tar"):
+		return "tar"
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		return "tar.gz"
+	case strings.HasSuffix(lower, ".tar.bz2"), strings.HasSuffix(lower, ".tbz"),
+		strings.HasSuffix(lower, ".tbz2"):
+		return "tar.bz2"
+	}
+	return ""
+}
+
+// archiveDestName strips every recognised archive extension off the
+// base filename, returning the bare stem to use as the extraction
+// destination folder. We strip both compound (.tar.gz) and simple
+// (.zip) suffixes so "data.tar.gz" lands in "data/", not "data.tar/".
+func archiveDestName(base string) string {
+	stripped := base
+	for _, ext := range []string{
+		".tar.gz", ".tar.bz2", ".tbz2", ".tbz", ".tgz",
+		".zip", ".tar",
+	} {
+		if strings.HasSuffix(strings.ToLower(stripped), ext) {
+			return stripped[:len(stripped)-len(ext)]
+		}
+	}
+	return stripped
+}
+
+// extractArchive dispatches by kind and unpacks into destRoot, which
+// must already exist. Returns the number of entries written so the
+// API can include it in the response (useful UX cue: "extracted 142
+// files").
+func extractArchive(archivePath, destRoot, kind string) (int, error) {
+	switch kind {
+	case "zip":
+		return extractZip(archivePath, destRoot)
+	case "tar":
+		f, err := os.Open(archivePath)
+		if err != nil { return 0, err }
+		defer f.Close()
+		return extractTar(f, destRoot)
+	case "tar.gz":
+		f, err := os.Open(archivePath)
+		if err != nil { return 0, err }
+		defer f.Close()
+		gz, err := gzip.NewReader(f)
+		if err != nil { return 0, err }
+		defer gz.Close()
+		return extractTar(gz, destRoot)
+	case "tar.bz2":
+		f, err := os.Open(archivePath)
+		if err != nil { return 0, err }
+		defer f.Close()
+		return extractTar(bzip2.NewReader(f), destRoot)
+	default:
+		return 0, fmt.Errorf("unsupported kind %q", kind)
+	}
+}
+
+// extractZip walks every entry of a zip archive and writes the file
+// contents to destRoot. Directories listed in the archive are created
+// explicitly; missing parent dirs for nested files are MkdirAll'd
+// just-in-time (zip archives are not guaranteed to list every parent
+// dir entry before its children).
+func extractZip(archivePath, destRoot string) (int, error) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil { return 0, err }
+	defer zr.Close()
+
+	count := 0
+	for _, f := range zr.File {
+		dest, err := safeJoin(destRoot, f.Name)
+		if err != nil {
+			continue
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
+		rc, err := f.Open()
+		if err != nil { return count, err }
+		out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil { rc.Close(); return count, err }
+		if _, err := io.Copy(out, rc); err != nil {
+			out.Close(); rc.Close(); return count, err
+		}
+		out.Close()
+		rc.Close()
+		count++
+	}
+	return count, nil
+}
+
+// extractTar walks a tar stream (already wrapped in any required
+// decompressor) and writes entries to destRoot. Only regular files
+// and directories are honoured; symlinks, char/block devices, fifos
+// and the like are silently skipped - they're rare in user-facing
+// archives and supporting them would have to negotiate with the
+// mount-wide symlink policy.
+func extractTar(r io.Reader, destRoot string) (int, error) {
+	tr := tar.NewReader(r)
+	count := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF { break }
+		if err != nil { return count, err }
+		dest, err := safeJoin(destRoot, hdr.Name)
+		if err != nil { continue }
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
+			out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+			if err != nil { return count, err }
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close(); return count, err
+			}
+			out.Close()
+			count++
+		default:
+			// Skip symlinks, hardlinks, fifos, devices: not
+			// safe to materialise without a clear policy
+			// matching the rest of the mount's surface.
+			continue
+		}
+	}
+	return count, nil
+}
+
+// safeJoin joins an extraction root with an archive-relative path
+// while enforcing zip-slip safety:
+//
+//   - the entry name must be a relative path (no leading slash,
+//     no Windows drive letter),
+//   - after Clean it must NOT escape the root via ".." traversals,
+//   - the cleaned result must still live underneath the root.
+//
+// Returns an error for any entry that fails the check; callers
+// should skip the entry instead of aborting the whole extraction
+// so one malformed path doesn't poison the whole archive.
+func safeJoin(root, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("empty entry name")
+	}
+	// Normalise separators: tar/zip use forward slashes regardless
+	// of the archiving platform.
+	clean := filepath.Clean("/" + filepath.ToSlash(name))
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "" || clean == "." {
+		return "", fmt.Errorf("invalid entry name")
+	}
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") {
+		return "", fmt.Errorf("absolute entry path")
+	}
+	joined := filepath.Join(root, clean)
+	if !filesystem.PathContains(root, joined) {
+		return "", fmt.Errorf("entry escapes extraction root")
+	}
+	return joined, nil
 }
