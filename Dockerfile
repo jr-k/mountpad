@@ -39,19 +39,11 @@ CMD ["air", "-c", ".air.toml"]
 # ---------- production image ----------
 FROM alpine:3.20 AS prod
 RUN apk add --no-cache ca-certificates tzdata \
- && addgroup -S mountpad && adduser -S -G mountpad -u 10001 mountpad \
- && mkdir -p /app /storage /db \
- && chown -R mountpad:mountpad /app /storage /db
+ && mkdir -p /app /db
 WORKDIR /app
-# --chown on every COPY so the unprivileged runtime user owns the
-# files end-to-end. Without it, COPY plants root-owned files even
-# though the parent directory was chowned earlier, which causes
-# permission denied on any later write (the inertia template
-# fallback used to silently miss for this reason).
-COPY --chown=mountpad:mountpad --from=backend-builder /out/mountpad /app/mountpad
-COPY --chown=mountpad:mountpad --from=frontend-builder /app/frontend/dist /app/frontend/dist
-COPY --chown=mountpad:mountpad migrations /app/migrations
-USER mountpad
+COPY --from=backend-builder /out/mountpad /app/mountpad
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+COPY migrations /app/migrations
 ENV MOUNTPAD_HTTP_ADDR=":4499" \
     MOUNTPAD_FRONTEND_DIST="/app/frontend/dist"
 EXPOSE 4499
