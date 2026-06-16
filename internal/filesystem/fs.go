@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -155,6 +156,32 @@ type WriteResult struct {
 	ModifiedAt time.Time
 }
 
+func ownerOf(path string) (uid, gid int) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return -1, -1
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return -1, -1
+	}
+	return int(stat.Uid), int(stat.Gid)
+}
+
+func applyOwnership(path string, uid, gid int) {
+	if uid >= 0 && gid >= 0 {
+		_ = os.Chown(path, uid, gid)
+	}
+}
+
+// InheritOwnership copies the UID/GID from ref onto target so that
+// files created by root inside a mounted volume keep the original
+// owner instead of flipping to 0:0.
+func InheritOwnership(target, ref string) {
+	uid, gid := ownerOf(ref)
+	applyOwnership(target, uid, gid)
+}
+
 // WriteFileAtomic writes content to a file using temp + rename inside the
 // same directory. It enforces conflict detection through expected checksum
 // and/or mtime. The previous file is preserved until the rename succeeds.
@@ -162,6 +189,11 @@ func WriteFileAtomic(absPath string, content []byte, opts WriteOptions) (*WriteR
 	dir := filepath.Dir(absPath)
 	base := filepath.Base(absPath)
 
+	// Capture the current owner before any mutation. For existing
+	// files we preserve the file's own UID/GID; for new files we
+	// inherit from the parent directory so uploads inside a volume
+	// owned by e.g. 1000:1000 stay consistent.
+	ownerRef := dir
 	if existing, err := os.Lstat(absPath); err == nil {
 		if existing.Mode()&os.ModeSymlink != 0 {
 			return nil, ErrSymlinkNotAllowed
@@ -169,6 +201,7 @@ func WriteFileAtomic(absPath string, content []byte, opts WriteOptions) (*WriteR
 		if opts.CreateOnly {
 			return nil, ErrAlreadyExists
 		}
+		ownerRef = absPath
 		if !opts.ExpectedMTime.IsZero() && !sameMTime(existing.ModTime(), opts.ExpectedMTime) {
 			return nil, ErrConflict
 		}
@@ -187,6 +220,7 @@ func WriteFileAtomic(absPath string, content []byte, opts WriteOptions) (*WriteR
 	} else if !opts.CreateOnly && opts.ExpectedChecksum != "" {
 		return nil, ErrConflict
 	}
+	uid, gid := ownerOf(ownerRef)
 
 	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
 	if err != nil {
@@ -211,6 +245,7 @@ func WriteFileAtomic(absPath string, content []byte, opts WriteOptions) (*WriteR
 		os.Remove(tmpName)
 		return nil, err
 	}
+	applyOwnership(absPath, uid, gid)
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return nil, err
@@ -223,14 +258,23 @@ func WriteFileAtomic(absPath string, content []byte, opts WriteOptions) (*WriteR
 }
 
 // CreateDir creates a single directory. parents=true behaves like MkdirAll.
+// The new directory inherits UID/GID from its parent.
 func CreateDir(absPath string, parents bool) error {
 	if _, err := os.Lstat(absPath); err == nil {
 		return ErrAlreadyExists
 	}
+	uid, gid := ownerOf(filepath.Dir(absPath))
 	if parents {
-		return os.MkdirAll(absPath, 0o755)
+		if err := os.MkdirAll(absPath, 0o755); err != nil {
+			return err
+		}
+	} else {
+		if err := os.Mkdir(absPath, 0o755); err != nil {
+			return err
+		}
 	}
-	return os.Mkdir(absPath, 0o755)
+	applyOwnership(absPath, uid, gid)
+	return nil
 }
 
 // Rename moves a file or directory. Symlinks are refused.

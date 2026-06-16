@@ -1011,10 +1011,12 @@ func streamPartToFile(src io.Reader, dirAbs, name string) (int64, error) {
 		os.Remove(tmpName)
 		return 0, err
 	}
-	if err := os.Rename(tmpName, filepath.Join(dirAbs, name)); err != nil {
+	dest := filepath.Join(dirAbs, name)
+	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
 		return 0, err
 	}
+	filesystem.InheritOwnership(dest, dirAbs)
 	return n, nil
 }
 
@@ -1186,6 +1188,7 @@ func extractZip(archivePath, destRoot string) (int, error) {
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+			filesystem.InheritOwnership(dest, destRoot)
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
@@ -1198,6 +1201,7 @@ func extractZip(archivePath, destRoot string) (int, error) {
 		}
 		out.Close()
 		rc.Close()
+		filesystem.InheritOwnership(dest, destRoot)
 		count++
 	}
 	return count, nil
@@ -1221,6 +1225,7 @@ func extractTar(r io.Reader, destRoot string) (int, error) {
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+			filesystem.InheritOwnership(dest, destRoot)
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
 			out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
@@ -1229,11 +1234,9 @@ func extractTar(r io.Reader, destRoot string) (int, error) {
 				out.Close(); return count, err
 			}
 			out.Close()
+			filesystem.InheritOwnership(dest, destRoot)
 			count++
 		default:
-			// Skip symlinks, hardlinks, fifos, devices: not
-			// safe to materialise without a clear policy
-			// matching the rest of the mount's surface.
 			continue
 		}
 	}
