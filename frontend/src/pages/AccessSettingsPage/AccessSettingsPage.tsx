@@ -91,24 +91,34 @@ const emptyGroupForm = { name: '', description: '', avatar_color: '' }
 const AccessSettingsPage: React.FC = () => {
   const { props } = usePage<SharedProps & Record<string, unknown>>()
   const t = useTheme() as Theme
+  const [loadingAccess, setLoadingAccess] = useState(true)
+  const [usersLoadError, setUsersLoadError] = useState<string | null>(null)
+  const [groupsLoadError, setGroupsLoadError] = useState<string | null>(null)
 
   // Users
   const [users, setUsers] = useState<User[]>([])
   const [openNewUser, setOpenNewUser] = useState(false)
+  const [creatingUser, setCreatingUser] = useState(false)
+  const [newUserError, setNewUserError] = useState<string | null>(null)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [resetUser, setResetUser] = useState<User | null>(null)
   const [deleteUser, setDeleteUser] = useState<User | null>(null)
+  const [deleteUserError, setDeleteUserError] = useState<string | null>(null)
   const [userForm, setUserForm] = useState(emptyUserForm)
   const [editUserForm, setEditUserForm] = useState<EditUserForm | null>(null)
   const [savingUser, setSavingUser] = useState(false)
   const [editUserError, setEditUserError] = useState<string | null>(null)
   const [resetPwd, setResetPwd] = useState('')
+  const [resetPwdError, setResetPwdError] = useState<string | null>(null)
+  const [resettingPassword, setResettingPassword] = useState(false)
 
   // Groups
   const [groups, setGroups] = useState<Group[]>([])
   // `null` = modal closed. `'new'` = creating. A Group value = editing it.
   const [editingGroup, setEditingGroup] = useState<Group | 'new' | null>(null)
   const [groupForm, setGroupForm] = useState(emptyGroupForm)
+  const [savingGroup, setSavingGroup] = useState(false)
+  const [groupError, setGroupError] = useState<string | null>(null)
   const [deleteGroup, setDeleteGroup] = useState<Group | null>(null)
 
   // Memberships: the modal lets you flip a user's group affiliations in
@@ -117,11 +127,36 @@ const AccessSettingsPage: React.FC = () => {
   const [manageUser, setManageUser] = useState<User | null>(null)
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set())
   const [savingMemberships, setSavingMemberships] = useState(false)
+  const [membershipError, setMembershipError] = useState<string | null>(null)
 
-  const loadUsers = async () => setUsers((await api.get<User[] | null>('/api/users')) ?? [])
-  const loadGroups = async () => setGroups((await api.get<Group[] | null>('/api/groups')) ?? [])
+  const loadUsers = async () => {
+    setUsers((await api.get<User[] | null>('/api/users')) ?? [])
+    setUsersLoadError(null)
+  }
+  const loadGroups = async () => {
+    setGroups((await api.get<Group[] | null>('/api/groups')) ?? [])
+    setGroupsLoadError(null)
+  }
 
-  useEffect(() => { void loadUsers(); void loadGroups() }, [])
+  useEffect(() => {
+    void (async () => {
+      const [usersResult, groupsResult] = await Promise.allSettled([
+        api.get<User[] | null>('/api/users'),
+        api.get<Group[] | null>('/api/groups'),
+      ])
+      if (usersResult.status === 'fulfilled') setUsers(usersResult.value ?? [])
+      else {
+        const error = usersResult.reason
+        setUsersLoadError(error instanceof HttpError && error.body ? error.body : 'Unable to load users.')
+      }
+      if (groupsResult.status === 'fulfilled') setGroups(groupsResult.value ?? [])
+      else {
+        const error = groupsResult.reason
+        setGroupsLoadError(error instanceof HttpError && error.body ? error.body : 'Unable to load groups.')
+      }
+      setLoadingAccess(false)
+    })()
+  }, [])
 
   // Maps used to render group chips on the users table and member chips on
   // the groups table. Both views read from the same source of truth: the
@@ -141,10 +176,19 @@ const AccessSettingsPage: React.FC = () => {
 
   // User CRUD
   const submitNewUser = async () => {
-    await api.post('/api/users', userForm)
-    setOpenNewUser(false)
-    setUserForm(emptyUserForm)
-    await loadUsers()
+    if (creatingUser) return
+    setCreatingUser(true)
+    setNewUserError(null)
+    try {
+      const created = await api.post<User>('/api/users', userForm)
+      setUsers((current) => [...current, { ...created, group_ids: [] }].sort((a, b) => a.username.localeCompare(b.username)))
+      setOpenNewUser(false)
+      setUserForm(emptyUserForm)
+    } catch (error: unknown) {
+      setNewUserError(error instanceof HttpError && error.body ? error.body : 'Unable to create this user.')
+    } finally {
+      setCreatingUser(false)
+    }
   }
 
   const openEditUser = (user: User) => {
@@ -166,9 +210,11 @@ const AccessSettingsPage: React.FC = () => {
     setEditUserError(null)
     try {
       const { password, ...profile } = editUserForm
-      await api.patch(`/api/users/${editingUser.id}`, password ? { ...profile, password } : profile)
+      const updated = await api.patch<User>(`/api/users/${editingUser.id}`, password ? { ...profile, password } : profile)
+      setUsers((current) => current.map((user) => (
+        user.id === updated.id ? { ...updated, group_ids: user.group_ids } : user
+      )))
       closeEditUser()
-      await loadUsers()
     } catch (error: unknown) {
       setEditUserError(error instanceof HttpError && error.body ? error.body : 'Unable to save this user.')
     } finally {
@@ -178,40 +224,68 @@ const AccessSettingsPage: React.FC = () => {
 
   const submitResetUser = async () => {
     if (!resetUser || !resetPwd) return
-    await api.patch(`/api/users/${resetUser.id}`, { password: resetPwd })
-    setResetUser(null); setResetPwd('')
-    await loadUsers()
+    setResettingPassword(true)
+    setResetPwdError(null)
+    try {
+      await api.patch(`/api/users/${resetUser.id}`, { password: resetPwd })
+      setResetUser(null)
+      setResetPwd('')
+    } catch (error: unknown) {
+      setResetPwdError(error instanceof HttpError && error.body ? error.body : 'Unable to reset this password.')
+    } finally {
+      setResettingPassword(false)
+    }
   }
 
   const submitDeleteUser = async () => {
     if (!deleteUser) return
-    await api.del(`/api/users/${deleteUser.id}`)
-    setDeleteUser(null)
-    await loadUsers()
+    setDeleteUserError(null)
+    try {
+      await api.del(`/api/users/${deleteUser.id}`)
+      setUsers((current) => current.filter((user) => user.id !== deleteUser.id))
+      setDeleteUser(null)
+    } catch (error: unknown) {
+      setDeleteUserError(error instanceof HttpError && error.body ? error.body : 'Unable to delete this user.')
+    }
   }
 
   // Group CRUD
   const openNewGroup = () => {
     setGroupForm(emptyGroupForm)
+    setGroupError(null)
     setEditingGroup('new')
   }
   const openEditGroup = (g: Group) => {
     setGroupForm({ name: g.name, description: g.description, avatar_color: g.avatar_color ?? '' })
+    setGroupError(null)
     setEditingGroup(g)
   }
   const closeGroupForm = () => {
     setEditingGroup(null)
     setGroupForm(emptyGroupForm)
+    setGroupError(null)
+    setSavingGroup(false)
   }
   const submitGroup = async () => {
-    if (!editingGroup) return
-    if (editingGroup === 'new') {
-      await api.post('/api/groups', groupForm)
-    } else {
-      await api.patch(`/api/groups/${editingGroup.id}`, groupForm)
+    if (!editingGroup || savingGroup) return
+    setSavingGroup(true)
+    setGroupError(null)
+    try {
+      if (editingGroup === 'new') {
+        const created = await api.post<Group>('/api/groups', groupForm)
+        setGroups((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)))
+      } else {
+        const updated = await api.patch<Group>(`/api/groups/${editingGroup.id}`, groupForm)
+        setGroups((current) => current
+          .map((group) => group.id === updated.id ? updated : group)
+          .sort((a, b) => a.name.localeCompare(b.name)))
+      }
+      closeGroupForm()
+    } catch (error: unknown) {
+      setGroupError(error instanceof HttpError && error.body ? error.body : 'Unable to save this group.')
+    } finally {
+      setSavingGroup(false)
     }
-    closeGroupForm()
-    await loadGroups()
   }
   const submitDeleteGroup = async () => {
     if (!deleteGroup) return
@@ -226,6 +300,7 @@ const AccessSettingsPage: React.FC = () => {
   const openManage = (u: User) => {
     setManageUser(u)
     setSelectedGroups(new Set(u.group_ids ?? []))
+    setMembershipError(null)
   }
   const toggleMembership = (gid: number) => {
     setSelectedGroups((prev) => {
@@ -238,18 +313,15 @@ const AccessSettingsPage: React.FC = () => {
   const submitMemberships = async () => {
     if (!manageUser) return
     setSavingMemberships(true)
+    setMembershipError(null)
     try {
-      const current = new Set(manageUser.group_ids ?? [])
-      const toAdd: number[] = []
-      const toRemove: number[] = []
-      for (const gid of selectedGroups) if (!current.has(gid)) toAdd.push(gid)
-      for (const gid of current) if (!selectedGroups.has(gid)) toRemove.push(gid)
-      // Sequence the calls so a transient failure leaves the UI consistent.
-      // Each endpoint is idempotent on the backend.
-      for (const gid of toAdd) await api.post(`/api/users/${manageUser.id}/groups`, { group_id: gid })
-      for (const gid of toRemove) await api.del(`/api/users/${manageUser.id}/groups/${gid}`)
+      await api.put(`/api/users/${manageUser.id}/groups`, { group_ids: [...selectedGroups] })
+      setUsers((current) => current.map((user) => (
+        user.id === manageUser.id ? { ...user, group_ids: [...selectedGroups] } : user
+      )))
       setManageUser(null)
-      await loadUsers()
+    } catch (error: unknown) {
+      setMembershipError(error instanceof HttpError && error.body ? error.body : 'Unable to update group memberships.')
     } finally {
       setSavingMemberships(false)
     }
@@ -267,6 +339,7 @@ const AccessSettingsPage: React.FC = () => {
   }, [users, groups])
 
   const renderGroupsCell = (u: User) => {
+    if (groupsLoadError) return <S.EmptyChips>groups unavailable</S.EmptyChips>
     const ids = u.group_ids ?? []
     if (ids.length === 0) return <S.EmptyChips>no groups</S.EmptyChips>
     return (
@@ -281,6 +354,7 @@ const AccessSettingsPage: React.FC = () => {
   }
 
   const renderMembersCell = (g: Group) => {
+    if (usersLoadError) return <S.EmptyChips>members unavailable</S.EmptyChips>
     const members = membersByGroup.get(g.id) ?? []
     if (members.length === 0) return <S.EmptyChips>no members</S.EmptyChips>
     return (
@@ -326,7 +400,7 @@ const AccessSettingsPage: React.FC = () => {
                   Local accounts that sign into MountPad. Admins bypass ACL checks. Use <strong>Groups</strong> to manage memberships.
                 </SP.SectionLead>
               </SP.SectionTitleWrap>
-              <Button variant="primary" onClick={() => setOpenNewUser(true)}>+ New user</Button>
+              <Button variant="primary" onClick={() => { setNewUserError(null); setOpenNewUser(true) }}>+ New user</Button>
             </SP.SectionHeader>
             <SP.TableHost>
             <SP.Table>
@@ -346,8 +420,8 @@ const AccessSettingsPage: React.FC = () => {
                 {users.length === 0 ? (
                   <SP.EmptyRow>
                     <td colSpan={8}>
-                      <b>No users yet</b>
-                      Create one to start signing in, or enable the authentication wizard above.
+                      <b>{loadingAccess ? 'Loading users…' : usersLoadError ? 'Unable to load users' : 'No users yet'}</b>
+                      {usersLoadError ?? 'Create one to start signing in, or enable the authentication wizard above.'}
                     </td>
                   </SP.EmptyRow>
                 ) : users.map((u, idx) => (
@@ -400,9 +474,20 @@ const AccessSettingsPage: React.FC = () => {
                           items={[
                             { key: 'edit',   label: 'Edit user',       icon: <EditIcon />,   onSelect: () => openEditUser(u) },
                             { key: 'groups', label: 'Manage groups',  icon: <GroupsIcon />, onSelect: () => openManage(u) },
-                            { key: 'reset',  label: 'Reset password', icon: <KeyIcon />,    onSelect: () => setResetUser(u) },
+                            {
+                              key: 'reset',
+                              label: 'Reset password',
+                              icon: <KeyIcon />,
+                              onSelect: () => { setResetPwdError(null); setResetUser(u) },
+                            },
                             { key: 'sep',    type: 'divider' },
-                            { key: 'del',    label: 'Delete user',    icon: <DeleteIcon />, tone: 'danger', onSelect: () => setDeleteUser(u) },
+                            {
+                              key: 'del',
+                              label: 'Delete user',
+                              icon: <DeleteIcon />,
+                              tone: 'danger',
+                              onSelect: () => { setDeleteUserError(null); setDeleteUser(u) },
+                            },
                           ]}
                         />
                       </SP.RowActions>
@@ -441,9 +526,11 @@ const AccessSettingsPage: React.FC = () => {
                 {groups.length === 0 ? (
                   <SP.EmptyRow>
                     <td colSpan={6}>
-                      <b>No groups yet</b>
-                      Create one to start scoping permissions across users. Conventional names:
-                      <code> readers</code>, <code>editors</code>, <code>ops</code>.
+                      <b>{loadingAccess ? 'Loading groups…' : groupsLoadError ? 'Unable to load groups' : 'No groups yet'}</b>
+                      {groupsLoadError ?? <>
+                        Create one to start scoping permissions across users. Conventional names:
+                        <code> readers</code>, <code>editors</code>, <code>ops</code>.
+                      </>}
                     </td>
                   </SP.EmptyRow>
                 ) : groups.map((g, idx) => (
@@ -493,13 +580,16 @@ const AccessSettingsPage: React.FC = () => {
           <Modal
             open={openNewUser}
             title="New user"
-            onClose={() => setOpenNewUser(false)}
-            onSubmit={submitNewUser}
+            onClose={() => { if (!creatingUser) { setOpenNewUser(false); setNewUserError(null) } }}
+            onSubmit={() => { if (!creatingUser) void submitNewUser() }}
             footer={<>
-              <Button variant="ghost" onClick={() => setOpenNewUser(false)}>Cancel</Button>
-              <Button variant="primary" onClick={submitNewUser}>Create</Button>
+              <Button variant="ghost" onClick={() => { setOpenNewUser(false); setNewUserError(null) }} disabled={creatingUser}>Cancel</Button>
+              <Button variant="primary" onClick={submitNewUser} disabled={creatingUser}>
+                {creatingUser ? 'Creating…' : 'Create'}
+              </Button>
             </>}
           >
+            <fieldset disabled={creatingUser} style={{ display: 'contents' }}>
             <SP.HelpText>
               The new account can sign in immediately. Administrators bypass ACL checks and can manage
               users, groups and mounts. You can assign groups right after creation.
@@ -511,12 +601,18 @@ const AccessSettingsPage: React.FC = () => {
               <input type="checkbox" checked={userForm.is_admin} onChange={(e) => setUserForm({ ...userForm, is_admin: e.target.checked })} />
               Grant administrator role
             </label>
+            {newUserError && (
+              <S.ModalFootnote style={{ color: t.color.danger, fontFamily: t.font.mono }}>
+                {newUserError}
+              </S.ModalFootnote>
+            )}
+            </fieldset>
           </Modal>
 
           <Modal
             open={editingUser !== null}
             title={`Edit user: ${editingUser?.username ?? ''}`}
-            onClose={closeEditUser}
+            onClose={() => { if (!savingUser) closeEditUser() }}
             onSubmit={() => { if (!savingUser) void submitEditUser() }}
             footer={<>
               <Button variant="ghost" onClick={closeEditUser} disabled={savingUser}>Cancel</Button>
@@ -526,7 +622,7 @@ const AccessSettingsPage: React.FC = () => {
             </>}
           >
             {editUserForm && (
-              <>
+              <fieldset disabled={savingUser} style={{ display: 'contents' }}>
                 <SP.HelpText>
                   The username is permanent. Profile, role and account status changes apply immediately.
                   Leave the password empty to keep the current one.
@@ -606,25 +702,40 @@ const AccessSettingsPage: React.FC = () => {
                     {editUserError}
                   </div>
                 )}
-              </>
+              </fieldset>
             )}
           </Modal>
 
           <Modal
             open={resetUser !== null}
             title={`Reset password: ${resetUser?.username ?? ''}`}
-            onClose={() => { setResetUser(null); setResetPwd('') }}
-            onSubmit={submitResetUser}
+            onClose={() => { if (!resettingPassword) { setResetUser(null); setResetPwd(''); setResetPwdError(null) } }}
+            onSubmit={() => { if (!resettingPassword) void submitResetUser() }}
             footer={<>
-              <Button variant="ghost" onClick={() => { setResetUser(null); setResetPwd('') }}>Cancel</Button>
-              <Button variant="primary" onClick={submitResetUser}>Set new password</Button>
+              <Button variant="ghost" onClick={() => { setResetUser(null); setResetPwd(''); setResetPwdError(null) }} disabled={resettingPassword}>Cancel</Button>
+              <Button variant="primary" onClick={submitResetUser} disabled={resettingPassword || !resetPwd}>
+                {resettingPassword ? 'Saving…' : 'Set new password'}
+              </Button>
             </>}
           >
             <SP.HelpText>
               The user keeps their existing sessions until they expire. They will need this password
               on their next sign-in.
             </SP.HelpText>
-            <Input label="New password" type="password" autoFocus value={resetPwd} onChange={(e) => setResetPwd(e.target.value)} />
+            <Input label="New password" type="password" autoFocus disabled={resettingPassword} value={resetPwd} onChange={(e) => setResetPwd(e.target.value)} />
+            {resetPwdError && (
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: 6,
+                background: `color-mix(in srgb, ${t.color.danger} 10%, transparent)`,
+                border: `1px solid color-mix(in srgb, ${t.color.danger} 30%, transparent)`,
+                color: t.color.danger,
+                fontSize: 13,
+                fontFamily: t.font.mono,
+              }}>
+                {resetPwdError}
+              </div>
+            )}
           </Modal>
 
           {/* Manage memberships modal: one place to add or remove all of a
@@ -633,9 +744,9 @@ const AccessSettingsPage: React.FC = () => {
           <Modal
             open={manageUser !== null}
             title={manageUser ? `Groups for ${manageUser.username}` : 'Manage memberships'}
-            onClose={() => setManageUser(null)}
+            onClose={() => { if (!savingMemberships) { setManageUser(null); setMembershipError(null) } }}
             footer={<>
-              <Button variant="ghost" onClick={() => setManageUser(null)} disabled={savingMemberships}>Cancel</Button>
+              <Button variant="ghost" onClick={() => { setManageUser(null); setMembershipError(null) }} disabled={savingMemberships}>Cancel</Button>
               <Button variant="primary" onClick={submitMemberships} disabled={savingMemberships}>
                 {savingMemberships ? 'Saving…' : 'Apply'}
               </Button>
@@ -653,6 +764,7 @@ const AccessSettingsPage: React.FC = () => {
                   <S.CheckRow key={g.id}>
                     <input
                       type="checkbox"
+                      disabled={savingMemberships}
                       checked={selectedGroups.has(g.id)}
                       onChange={() => toggleMembership(g.id)}
                     />
@@ -669,21 +781,27 @@ const AccessSettingsPage: React.FC = () => {
                 {selectedGroups.size} selected
               </S.ModalFootnote>
             )}
+            {membershipError && (
+              <S.ModalFootnote style={{ color: t.color.danger, fontFamily: t.font.mono }}>
+                {membershipError}
+              </S.ModalFootnote>
+            )}
           </Modal>
 
           {/* Create/Edit group modal */}
           <Modal
             open={editingGroup !== null}
             title={editingGroup === 'new' ? 'New group' : `Edit group: ${typeof editingGroup === 'object' ? editingGroup?.name : ''}`}
-            onClose={closeGroupForm}
-            onSubmit={submitGroup}
+            onClose={() => { if (!savingGroup) closeGroupForm() }}
+            onSubmit={() => { if (!savingGroup) void submitGroup() }}
             footer={<>
-              <Button variant="ghost" onClick={closeGroupForm}>Cancel</Button>
-              <Button variant="primary" onClick={submitGroup}>
-                {editingGroup === 'new' ? 'Create' : 'Save changes'}
+              <Button variant="ghost" onClick={closeGroupForm} disabled={savingGroup}>Cancel</Button>
+              <Button variant="primary" onClick={submitGroup} disabled={savingGroup}>
+                {savingGroup ? 'Saving…' : editingGroup === 'new' ? 'Create' : 'Save changes'}
               </Button>
             </>}
           >
+            <fieldset disabled={savingGroup} style={{ display: 'contents' }}>
             <SP.HelpText>
               Pick a short, stable name. It will show up in the permissions panel next to file owners,
               and you can assign it to any user from the Users table.
@@ -730,6 +848,12 @@ const AccessSettingsPage: React.FC = () => {
                 </div>
               </div>
             </div>
+            {groupError && (
+              <S.ModalFootnote style={{ color: t.color.danger, fontFamily: t.font.mono }}>
+                {groupError}
+              </S.ModalFootnote>
+            )}
+            </fieldset>
           </Modal>
 
           <ConfirmDialog
@@ -737,9 +861,18 @@ const AccessSettingsPage: React.FC = () => {
             destructive
             title="Delete user"
             confirmLabel="Delete"
-            message={<>Delete user <code>{deleteUser?.username}</code>? This cannot be undone. The user's group memberships are removed; file ownership falls back to the mount point default.</>}
+            message={<>
+              Delete user <code>{deleteUser?.username}</code>? This cannot be undone. Group memberships
+              are removed and mounts using this account as their default owner are cleared. Existing
+              file ACL entries may keep the old numeric ID until reassigned.
+              {deleteUserError && (
+                <span style={{ display: 'block', marginTop: 10, color: t.color.danger, fontFamily: t.font.mono }}>
+                  {deleteUserError}
+                </span>
+              )}
+            </>}
             onConfirm={submitDeleteUser}
-            onCancel={() => setDeleteUser(null)}
+            onCancel={() => { setDeleteUser(null); setDeleteUserError(null) }}
           />
 
           <ConfirmDialog
@@ -749,8 +882,8 @@ const AccessSettingsPage: React.FC = () => {
             confirmLabel="Delete"
             message={<>
               Delete group <code>{deleteGroup?.name}</code>? Every membership is removed, but the
-              users themselves are kept. Files that were owned by this group revert to the mount's
-              default group until you assign a new one.
+              users themselves are kept. Mounts using it as their default group are cleared; existing
+              file ACL entries may keep the old numeric ID until reassigned.
             </>}
             onConfirm={submitDeleteGroup}
             onCancel={() => setDeleteGroup(null)}

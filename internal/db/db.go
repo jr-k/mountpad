@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
+	modernsqlite "modernc.org/sqlite"
 
 	"github.com/mountpad/mountpad/internal/config"
 )
@@ -80,6 +81,27 @@ func (db *DB) Placeholder(query string) string {
 func (db *DB) Now() time.Time { return time.Now().UTC() }
 
 var ErrNotFound = errors.New("not found")
+
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	var sqliteErr *modernsqlite.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code() == 1555 || sqliteErr.Code() == 2067
+	}
+	return false
+}
+
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503"
+	}
+	var sqliteErr *modernsqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == 787
+}
 
 // ensureSQLiteParentDir extracts the file path from a SQLite DSN
 // (e.g. "file:/db/mountpad.db?_pragma=foreign_keys(1)") and

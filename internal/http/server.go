@@ -71,8 +71,8 @@ func NewRouter(d *Deps) http.Handler {
 		// resolve to the same SPA shell. The frontend parses the path to
 		// restore the active mount point and open the requested file.
 		r.Get("/workspace/*", pages.Workspace)
-		r.Get("/settings/access", pages.AccessSettings)
-		r.Get("/settings/mount-points", pages.MountPointsSettings)
+		r.With(auth.AdminOnly).Get("/settings/access", pages.AccessSettings)
+		r.With(auth.AdminOnly).Get("/settings/mount-points", pages.MountPointsSettings)
 		// Profile page: every authenticated user can edit their own
 		// display name, email, avatar, and password from here.
 		r.Get("/profile", pages.Profile)
@@ -120,6 +120,7 @@ func NewRouter(d *Deps) http.Handler {
 				r.Post("/users", usersH.Create)
 				r.Patch("/users/{id}", usersH.Update)
 				r.Delete("/users/{id}", usersH.Delete)
+				r.Put("/users/{id}/groups", usersH.ReplaceGroups)
 				r.Post("/users/{id}/groups", usersH.AddToGroup)
 				r.Delete("/users/{id}/groups/{groupId}", usersH.RemoveFromGroup)
 

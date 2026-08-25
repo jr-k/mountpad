@@ -20,9 +20,10 @@ const ROWS: { label: string; bits: [number, number, number] }[] = [
   { label: 'Group',  bits: [BITS.GR, BITS.GW, BITS.GX] },
   { label: 'Others', bits: [BITS.OR, BITS.OW, BITS.OX] },
 ]
+const PERMISSIONS = ['read', 'write', 'execute'] as const
 
 export const PermissionMatrix: React.FC<PermissionMatrixProps> = ({ mode, onChange, disabled = false }) => (
-  <S.PermissionMatrixRoot>
+  <S.PermissionMatrixRoot role="group" aria-label="Permission mode">
     <S.HeaderCell />
     <S.HeaderCell>Read</S.HeaderCell>
     <S.HeaderCell>Write</S.HeaderCell>
@@ -36,6 +37,8 @@ export const PermissionMatrix: React.FC<PermissionMatrixProps> = ({ mode, onChan
             key={bit}
             type="button"
             $on={(mode & bit) !== 0}
+            aria-label={`${row.label} ${PERMISSIONS[idx]}`}
+            aria-pressed={(mode & bit) !== 0}
             disabled={disabled}
             onClick={() => onChange(toggleBit(mode, bit))}
           >

@@ -13,6 +13,8 @@ type UsersRepo struct{ DB *db.DB }
 
 func NewUsersRepo(d *db.DB) *UsersRepo { return &UsersRepo{DB: d} }
 
+var ErrLastActiveAdmin = errors.New("last active administrator")
+
 // Keep this column list synchronised with `scanUser`. Profile fields
 // (first_name/last_name/email/avatar_color) were added in migration 0002
 // and default to empty strings server-side so old rows scan cleanly.
@@ -116,16 +118,168 @@ func (r *UsersRepo) UpdatePassword(ctx context.Context, id int64, hash string) e
 	return err
 }
 
+type UserChanges struct {
+	DisplayName  *string
+	FirstName    *string
+	LastName     *string
+	Email        *string
+	AvatarColor  *string
+	IsAdmin      *bool
+	IsActive     *bool
+	PasswordHash *string
+}
+
+// UpdateAtomic locks and reloads the current user set before applying the
+// requested fields. This prevents concurrent PATCH requests from restoring
+// stale profile, role, or activity values and serializes last-admin checks.
+func (r *UsersRepo) UpdateAtomic(ctx context.Context, id int64, changes UserChanges) (*models.User, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	users, err := r.lockUsers(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	var u *models.User
+	activeAdmins := 0
+	for _, candidate := range users {
+		if candidate.IsAdmin && candidate.IsActive {
+			activeAdmins++
+		}
+		if candidate.ID == id {
+			u = candidate
+		}
+	}
+	if u == nil {
+		return nil, db.ErrNotFound
+	}
+	wasActiveAdmin := u.IsAdmin && u.IsActive
+	if changes.DisplayName != nil {
+		u.DisplayName = *changes.DisplayName
+	}
+	if changes.FirstName != nil {
+		u.FirstName = *changes.FirstName
+	}
+	if changes.LastName != nil {
+		u.LastName = *changes.LastName
+	}
+	if changes.Email != nil {
+		u.Email = *changes.Email
+	}
+	if changes.AvatarColor != nil {
+		u.AvatarColor = *changes.AvatarColor
+	}
+	if changes.IsAdmin != nil {
+		u.IsAdmin = *changes.IsAdmin
+	}
+	if changes.IsActive != nil {
+		u.IsActive = *changes.IsActive
+	}
+	if wasActiveAdmin && (!u.IsAdmin || !u.IsActive) && activeAdmins <= 1 {
+		return nil, ErrLastActiveAdmin
+	}
+
+	q := r.DB.Placeholder(`UPDATE users SET
+		display_name = ?, first_name = ?, last_name = ?, email = ?, avatar_color = ?,
+		is_admin = ?, is_active = ?,
+		updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`)
+	result, err := tx.ExecContext(ctx, q,
+		u.DisplayName, u.FirstName, u.LastName, u.Email, u.AvatarColor,
+		u.IsAdmin, u.IsActive, u.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, db.ErrNotFound
+	}
+	if changes.PasswordHash != nil {
+		q = r.DB.Placeholder("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+		if _, err := tx.ExecContext(ctx, q, *changes.PasswordHash, u.ID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 func (r *UsersRepo) Delete(ctx context.Context, id int64) error {
 	q := r.DB.Placeholder("DELETE FROM users WHERE id = ?")
 	_, err := r.DB.ExecContext(ctx, q, id)
 	return err
 }
 
-func (r *UsersRepo) CountActiveAdmins(ctx context.Context) (int, error) {
-	var count int
-	err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE is_admin = TRUE AND is_active = TRUE").Scan(&count)
-	return count, err
+func (r *UsersRepo) DeleteAtomic(ctx context.Context, id int64) error {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	users, err := r.lockUsers(ctx, tx)
+	if err != nil {
+		return err
+	}
+	var target *models.User
+	activeAdmins := 0
+	for _, candidate := range users {
+		if candidate.IsAdmin && candidate.IsActive {
+			activeAdmins++
+		}
+		if candidate.ID == id {
+			target = candidate
+		}
+	}
+	if target == nil {
+		return db.ErrNotFound
+	}
+	if target.IsAdmin && target.IsActive && activeAdmins <= 1 {
+		return ErrLastActiveAdmin
+	}
+	q := r.DB.Placeholder("DELETE FROM users WHERE id = ?")
+	result, err := tx.ExecContext(ctx, q, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return db.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (r *UsersRepo) lockUsers(ctx context.Context, tx *sql.Tx) ([]*models.User, error) {
+	q := "SELECT " + userCols + " FROM users ORDER BY id"
+	if r.DB.Driver == "postgres" {
+		q += " FOR UPDATE"
+	}
+	rows, err := tx.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*models.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 func (r *UsersRepo) GroupIDsFor(ctx context.Context, userID int64) ([]int64, error) {
@@ -161,4 +315,34 @@ func (r *UsersRepo) RemoveGroup(ctx context.Context, userID, groupID int64) erro
 	q := r.DB.Placeholder("DELETE FROM user_groups WHERE user_id = ? AND group_id = ?")
 	_, err := r.DB.ExecContext(ctx, q, userID, groupID)
 	return err
+}
+
+func (r *UsersRepo) ReplaceGroups(ctx context.Context, userID int64, groupIDs []int64) error {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var exists int
+	q := r.DB.Placeholder("SELECT 1 FROM users WHERE id = ?")
+	if r.DB.Driver == "postgres" {
+		q += " FOR UPDATE"
+	}
+	if err := tx.QueryRowContext(ctx, q, userID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return db.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	q = r.DB.Placeholder("DELETE FROM user_groups WHERE user_id = ?")
+	if _, err := tx.ExecContext(ctx, q, userID); err != nil {
+		return err
+	}
+	q = r.DB.Placeholder("INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)")
+	for _, groupID := range groupIDs {
+		if _, err := tx.ExecContext(ctx, q, userID, groupID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

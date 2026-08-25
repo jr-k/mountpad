@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mountpad/mountpad/internal/db"
 	"github.com/mountpad/mountpad/internal/models"
 	"github.com/mountpad/mountpad/internal/mountpoints"
 )
@@ -15,6 +18,23 @@ type MountPointsHandler struct{ Svc *mountpoints.Service }
 
 func NewMountPointsHandler(s *mountpoints.Service) *MountPointsHandler {
 	return &MountPointsHandler{Svc: s}
+}
+
+func writeMountError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, mountpoints.ErrSlugInvalid),
+		errors.Is(err, mountpoints.ErrNameRequired),
+		errors.Is(err, mountpoints.ErrHostPath),
+		errors.Is(err, mountpoints.ErrModeInvalid),
+		errors.Is(err, mountpoints.ErrPrincipal):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, mountpoints.ErrSlugExists):
+		http.Error(w, "slug already exists", http.StatusConflict)
+	case errors.Is(err, db.ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 func (h *MountPointsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +51,7 @@ type mountPayload struct {
 	Name           string `json:"name"`
 	Description    string `json:"description"`
 	HostPath       string `json:"host_path"`
-	IsActive       bool   `json:"is_active"`
+	IsActive       *bool  `json:"is_active,omitempty"`
 	DefaultOwnerID *int64 `json:"default_owner_id,omitempty"`
 	DefaultGroupID *int64 `json:"default_group_id,omitempty"`
 	// Pointer semantics distinguish an omitted mode (use the default on
@@ -42,14 +62,42 @@ type mountPayload struct {
 	// is a valid value and the only way for the user to clear a
 	// previously picked colour.
 	AvatarColor string `json:"avatar_color"`
-	// FollowSymlinks is the per-mount override of the global
-	// MOUNTPAD_FOLLOW_SYMLINK env var. We accept it on every write
-	// (true OR false are both meaningful) so admins can flip the
-	// flag from the settings UI without having to redeploy. The
-	// field is a non-pointer bool: a missing key in the JSON body
-	// decodes to false, which would be a silent regression for any
-	// client that doesn't send it. The frontend ALWAYS sends it.
-	FollowSymlinks bool `json:"follow_symlinks"`
+	// Omitted booleans use the database-facing defaults on creation.
+	FollowSymlinks *bool `json:"follow_symlinks,omitempty"`
+}
+
+// nullableID preserves the three states a PATCH needs: omitted (leave the
+// current value alone), a numeric ID (assign it), and null (clear it).
+type nullableID struct {
+	Set   bool
+	Value *int64
+}
+
+func (n *nullableID) UnmarshalJSON(data []byte) error {
+	n.Set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		n.Value = nil
+		return nil
+	}
+	var value int64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	n.Value = &value
+	return nil
+}
+
+type updateMountPayload struct {
+	Slug           *string    `json:"slug,omitempty"`
+	Name           *string    `json:"name,omitempty"`
+	Description    *string    `json:"description,omitempty"`
+	HostPath       *string    `json:"host_path,omitempty"`
+	IsActive       *bool      `json:"is_active,omitempty"`
+	DefaultOwnerID nullableID `json:"default_owner_id"`
+	DefaultGroupID nullableID `json:"default_group_id"`
+	DefaultMode    *uint16    `json:"default_mode,omitempty"`
+	AvatarColor    *string    `json:"avatar_color,omitempty"`
+	FollowSymlinks *bool      `json:"follow_symlinks,omitempty"`
 }
 
 func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -62,16 +110,24 @@ func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if p.DefaultMode != nil {
 		defaultMode = *p.DefaultMode
 	}
+	isActive := true
+	if p.IsActive != nil {
+		isActive = *p.IsActive
+	}
+	followSymlinks := true
+	if p.FollowSymlinks != nil {
+		followSymlinks = *p.FollowSymlinks
+	}
 	m := &models.MountPoint{
 		Slug: p.Slug, Name: p.Name, Description: p.Description,
-		HostPath: p.HostPath, IsActive: p.IsActive,
+		HostPath: p.HostPath, IsActive: isActive,
 		DefaultOwnerID: p.DefaultOwnerID, DefaultGroupID: p.DefaultGroupID,
 		DefaultMode:    defaultMode,
 		AvatarColor:    p.AvatarColor,
-		FollowSymlinks: p.FollowSymlinks,
+		FollowSymlinks: followSymlinks,
 	}
 	if err := h.Svc.Create(r.Context(), m); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeMountError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, m)
@@ -83,39 +139,20 @@ func (h *MountPointsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	m, err := h.Svc.Repo.GetByID(r.Context(), id)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	var p mountPayload
+	var p updateMountPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if p.Slug != "" {
-		m.Slug = p.Slug
-	}
-	if p.Name != "" {
-		m.Name = p.Name
-	}
-	m.Description = p.Description
-	if p.HostPath != "" {
-		m.HostPath = p.HostPath
-	}
-	m.IsActive = p.IsActive
-	m.DefaultOwnerID = p.DefaultOwnerID
-	m.DefaultGroupID = p.DefaultGroupID
-	if p.DefaultMode != nil {
-		m.DefaultMode = *p.DefaultMode
-	}
-	// Empty string is a valid value (the user explicitly cleared the
-	// custom colour to fall back on the deterministic palette), so we
-	// always assign instead of guarding with `if != ""`.
-	m.AvatarColor = p.AvatarColor
-	m.FollowSymlinks = p.FollowSymlinks
-	if err := h.Svc.Update(r.Context(), m); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	m, err := h.Svc.Patch(r.Context(), id, mountpoints.Changes{
+		Slug: p.Slug, Name: p.Name, Description: p.Description, HostPath: p.HostPath,
+		IsActive:        p.IsActive,
+		DefaultOwnerSet: p.DefaultOwnerID.Set, DefaultOwnerID: p.DefaultOwnerID.Value,
+		DefaultGroupSet: p.DefaultGroupID.Set, DefaultGroupID: p.DefaultGroupID.Value,
+		DefaultMode: p.DefaultMode, AvatarColor: p.AvatarColor, FollowSymlinks: p.FollowSymlinks,
+	})
+	if err != nil {
+		writeMountError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, m)

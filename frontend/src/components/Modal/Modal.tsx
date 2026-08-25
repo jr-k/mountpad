@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
 import { pushModal, popModal, isTopModal } from '@/lib/modalStack'
@@ -44,6 +44,10 @@ interface ModalProps {
  * Portalling to body sidesteps both classes of bug.
  */
 export const Modal: React.FC<ModalProps> = ({ open, title, onClose, footer, children, onSubmit, size = 'md' }) => {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
+
   // While the modal is open we (a) own Escape to close ourselves -
   // but only when we are the topmost dialog (otherwise stacked
   // modals would all dismiss in a single keystroke instead of peeling
@@ -56,23 +60,66 @@ export const Modal: React.FC<ModalProps> = ({ open, title, onClose, footer, chil
   useEffect(() => {
     if (!open) return
     const id = pushModal()
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector = [
+      'button:not([disabled]):not([tabindex="-1"])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      'a[href]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',')
+    const focusFrame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const target = dialog.querySelector<HTMLElement>('[autofocus]')
+        ?? dialog.querySelector<HTMLElement>(focusableSelector)
+        ?? dialog
+      target.focus()
+    })
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
       if (!isTopModal(id)) return
+      if (e.key === 'Tab') {
+        const dialog = dialogRef.current
+        if (!dialog) return
+        const focusable = [...dialog.querySelectorAll<HTMLElement>(focusableSelector)]
+        if (focusable.length === 0) {
+          e.preventDefault()
+          dialog.focus()
+          return
+        }
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (!dialog.contains(document.activeElement)) {
+          e.preventDefault()
+          const target = e.shiftKey ? last : first
+          target.focus()
+        } else if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+        return
+      }
+      if (e.key !== 'Escape') return
       // stopPropagation isn't enough here: every open modal's effect
       // attaches its OWN window-level listener and they all fire on
       // the same event, regardless of registration order. Guarding
       // with isTopModal is the only way to keep the close to a
       // single dialog per Escape.
       e.stopPropagation()
-      onClose()
+      onCloseRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => {
+      window.cancelAnimationFrame(focusFrame)
       window.removeEventListener('keydown', onKey)
       popModal(id)
+      if (previousFocus && document.contains(previousFocus)) previousFocus.focus()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
   if (typeof document === 'undefined') return null
@@ -91,7 +138,7 @@ export const Modal: React.FC<ModalProps> = ({ open, title, onClose, footer, chil
 
   return createPortal(
     <S.ModalOverlay onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <S.Dialog $width={size} role="dialog" aria-modal="true" aria-label={title}>
+      <S.Dialog ref={dialogRef} tabIndex={-1} $width={size} role="dialog" aria-modal="true" aria-label={title}>
         <S.Header>{title}</S.Header>
         {onSubmit ? (
           <S.Form

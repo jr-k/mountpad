@@ -37,10 +37,10 @@ import (
 )
 
 type FSHandler struct {
-	Cfg       *config.Config
-	Mounts    *repositories.MountPointsRepo
-	Manifest  *manifests.Store
-	Resolver  *acl.Resolver
+	Cfg      *config.Config
+	Mounts   *repositories.MountPointsRepo
+	Manifest *manifests.Store
+	Resolver *acl.Resolver
 }
 
 func NewFSHandler(cfg *config.Config, m *repositories.MountPointsRepo, mf *manifests.Store, r *acl.Resolver) *FSHandler {
@@ -54,13 +54,25 @@ func (h *FSHandler) loadMount(r *http.Request) (*models.MountPoint, error) {
 	if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
 		mp, err := h.Mounts.GetByID(r.Context(), id)
 		if err == nil {
-			return mp, nil
+			return visibleMountForRequest(r, mp)
 		}
 		if !errors.Is(err, db.ErrNotFound) {
 			return nil, err
 		}
 	}
-	return h.Mounts.GetBySlug(r.Context(), idStr)
+	mp, err := h.Mounts.GetBySlug(r.Context(), idStr)
+	if err != nil {
+		return nil, err
+	}
+	return visibleMountForRequest(r, mp)
+}
+
+func visibleMountForRequest(r *http.Request, mp *models.MountPoint) (*models.MountPoint, error) {
+	user := auth.UserFrom(r.Context())
+	if !mp.IsActive && (user == nil || !user.IsAdmin) {
+		return nil, db.ErrNotFound
+	}
+	return mp, nil
 }
 
 func (h *FSHandler) resolve(r *http.Request, mp *models.MountPoint, userRel string) (*filesystem.ResolvedPath, error) {
@@ -91,7 +103,7 @@ func (h *FSHandler) writeError(w http.ResponseWriter, err error) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 	case errors.Is(err, filesystem.ErrSymlinkNotAllowed):
 		http.Error(w, "symlink not allowed", http.StatusForbidden)
-	case errors.Is(err, filesystem.ErrNotFound):
+	case errors.Is(err, filesystem.ErrNotFound), errors.Is(err, db.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, filesystem.ErrAlreadyExists):
 		http.Error(w, "already exists", http.StatusConflict)
@@ -150,15 +162,15 @@ func (h *FSHandler) decorate(ctx context.Context, mp *models.MountPoint, dirAbs 
 			continue
 		}
 		out = append(out, models.FileEntry{
-			Name:       e.Name,
-			Path:       relativeTo(mp.HostPath, full),
-			IsDir:      e.IsDir,
-			IsSymlink:  e.IsSymlink,
-			Size:       e.Size,
-			ModifiedAt: e.ModifiedAt,
-			OwnerID:    eff.OwnerID,
-			GroupID:    eff.GroupID,
-			Mode:       eff.Mode,
+			Name:        e.Name,
+			Path:        relativeTo(mp.HostPath, full),
+			IsDir:       e.IsDir,
+			IsSymlink:   e.IsSymlink,
+			Size:        e.Size,
+			ModifiedAt:  e.ModifiedAt,
+			OwnerID:     eff.OwnerID,
+			GroupID:     eff.GroupID,
+			Mode:        eff.Mode,
 			HasManifest: eff.Source == "manifest",
 		})
 	}
@@ -176,10 +188,10 @@ func relativeTo(root, p string) string {
 // mediaKind classifies a filename into one of the inline-preview
 // families the frontend knows how to render natively:
 //
-//   "image"  → <img src="...">
-//   "video"  → <video controls src="...">
-//   "audio"  → <audio controls src="...">
-//   "pdf"    → <iframe src="..."> (every modern browser ships a viewer)
+//	"image"  → <img src="...">
+//	"video"  → <video controls src="...">
+//	"audio"  → <audio controls src="...">
+//	"pdf"    → <iframe src="..."> (every modern browser ships a viewer)
 //
 // Returns "" for anything else, in which case the editor falls back
 // to the existing hex preview. Detection is extension-based - same
@@ -244,10 +256,10 @@ func (h *FSHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mount_id": mp.ID,
+		"mount_id":   mp.ID,
 		"mount_slug": mp.Slug,
-		"path":     rp.Relative,
-		"entries":  h.decorate(r.Context(), mp, rp.Absolute, entries),
+		"path":       rp.Relative,
+		"entries":    h.decorate(r.Context(), mp, rp.Absolute, entries),
 	})
 }
 
@@ -255,15 +267,23 @@ func (h *FSHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *FSHandler) Read(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rel := r.URL.Query().Get("path")
 	if err := h.rejectManifest(rel, user.IsAdmin); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	rp, err := h.resolve(r, mp, rel)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionRead); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	// Lstat alongside the read so the response can carry an
@@ -285,7 +305,10 @@ func (h *FSHandler) Read(w http.ResponseWriter, r *http.Request) {
 	// needs.
 	if mk := mediaKind(filepath.Base(rp.Absolute)); mk != "" {
 		st, err := os.Stat(rp.Absolute)
-		if err != nil { h.writeError(w, err); return }
+		if err != nil {
+			h.writeError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"path":        rp.Relative,
 			"is_binary":   true,
@@ -298,7 +321,10 @@ func (h *FSHandler) Read(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := filesystem.ReadFile(rp.Absolute, h.Cfg.MaxEditableFileSize)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if res.IsBinary {
 		// Cap the hex-preview payload so a 4 MiB binary doesn't ship
 		// ~5.4 MiB of base64 down the wire. 256 KiB is plenty for
@@ -345,22 +371,39 @@ func (h *FSHandler) Write(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p writePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	rp, err := h.resolve(r, mp, p.Path); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionWrite); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	if int64(len(p.Content)) > h.Cfg.MaxEditableFileSize {
-		h.writeError(w, filesystem.ErrFileTooLarge); return
+		h.writeError(w, filesystem.ErrFileTooLarge)
+		return
 	}
 	res, err := filesystem.WriteFileAtomic(rp.Absolute, []byte(p.Content), filesystem.WriteOptions{
 		ExpectedChecksum: p.ExpectedChecksum,
 		ExpectedMTime:    p.ExpectedMTime,
 	})
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"checksum": res.Checksum, "modified_at": res.ModifiedAt,
 	})
@@ -376,18 +419,34 @@ func (h *FSHandler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p createPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	rp, err := h.resolve(r, mp, p.Path); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	parentAbs := filepath.Dir(rp.Absolute)
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), parentAbs, true, acl.ActionCreate); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	res, err := filesystem.WriteFileAtomic(rp.Absolute, []byte(p.Content), filesystem.WriteOptions{CreateOnly: true})
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"path": rp.Relative, "checksum": res.Checksum, "modified_at": res.ModifiedAt,
 	})
@@ -398,15 +457,28 @@ func (h *FSHandler) CreateDir(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p createPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	rp, err := h.resolve(r, mp, p.Path); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	parentAbs := filepath.Dir(rp.Absolute)
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), parentAbs, true, acl.ActionCreate); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
-	if err := filesystem.CreateDir(rp.Absolute, false); err != nil { h.writeError(w, err); return }
+	if err := filesystem.CreateDir(rp.Absolute, false); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"path": rp.Relative})
 }
 
@@ -420,22 +492,46 @@ func (h *FSHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p renamePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.From, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.To, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	src, err := h.resolve(r, mp, p.From); if err != nil { h.writeError(w, err); return }
-	dst, err := h.resolve(r, mp, p.To); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.From, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.To, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	src, err := h.resolve(r, mp, p.From)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	dst, err := h.resolve(r, mp, p.To)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	mc := mountpoints.MountContext(mp)
 	if err := h.Resolver.Check(user, mc, filepath.Dir(src.Absolute), true, acl.ActionDelete); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	if err := h.Resolver.Check(user, mc, filepath.Dir(dst.Absolute), true, acl.ActionCreate); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
-	if err := filesystem.Rename(src.Absolute, dst.Absolute); err != nil { h.writeError(w, err); return }
+	if err := filesystem.Rename(src.Absolute, dst.Absolute); err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	// Carry over the manifest entry if it existed, then drop the source row.
 	if mfSrc, ok, _ := h.Manifest.Load(filepath.Dir(src.Absolute)); ok {
@@ -457,27 +553,47 @@ func (h *FSHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p deletePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	rp, err := h.resolve(r, mp, p.Path); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	mc := mountpoints.MountContext(mp)
 	if err := h.Resolver.Check(user, mc, filepath.Dir(rp.Absolute), true, acl.ActionDelete); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	info, err := os.Lstat(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	base := filepath.Base(rp.Absolute)
 
 	if info.IsDir() {
 		if err := filesystem.DeleteDirSimple(rp.Absolute, h.Cfg.ManifestFilename); err != nil {
-			h.writeError(w, err); return
+			h.writeError(w, err)
+			return
 		}
 	} else {
-		if err := filesystem.DeleteFile(rp.Absolute); err != nil { h.writeError(w, err); return }
+		if err := filesystem.DeleteFile(rp.Absolute); err != nil {
+			h.writeError(w, err)
+			return
+		}
 	}
 	_ = h.Manifest.DeleteEntry(filepath.Dir(rp.Absolute), base)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": rp.Relative})
@@ -499,19 +615,29 @@ func (h *FSHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rels := r.URL.Query()["path"]
 	if len(rels) == 0 {
-		http.Error(w, "missing path", http.StatusBadRequest); return
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
 	}
 
 	mc := mountpoints.MountContext(mp)
 	resolved := make([]*filesystem.ResolvedPath, 0, len(rels))
 	infos := make([]os.FileInfo, 0, len(rels))
 	for _, rel := range rels {
-		if err := h.rejectManifest(rel, user.IsAdmin); err != nil { h.writeError(w, err); return }
+		if err := h.rejectManifest(rel, user.IsAdmin); err != nil {
+			h.writeError(w, err)
+			return
+		}
 		rp, err := h.resolve(r, mp, rel)
-		if err != nil { h.writeError(w, err); return }
+		if err != nil {
+			h.writeError(w, err)
+			return
+		}
 		// Stat (not Lstat) so symlinks transparently behave like
 		// their target: a symlink to a directory walks into a zip,
 		// a symlink to a file streams as that file. The Resolve
@@ -523,11 +649,16 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 		// text, you can also DOWNLOAD it.
 		info, err := os.Stat(rp.Absolute)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) { h.writeError(w, filesystem.ErrNotFound); return }
-			h.writeError(w, err); return
+			if errors.Is(err, os.ErrNotExist) {
+				h.writeError(w, filesystem.ErrNotFound)
+				return
+			}
+			h.writeError(w, err)
+			return
 		}
 		if err := h.Resolver.Check(user, mc, rp.Absolute, info.IsDir(), acl.ActionRead); err != nil {
-			h.writeError(w, err); return
+			h.writeError(w, err)
+			return
 		}
 		resolved = append(resolved, rp)
 		infos = append(infos, info)
@@ -582,15 +713,23 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 		// `<base>/<rel-to-base>`. Manifests and our app dotfolder
 		// are filtered out the same way they are everywhere else.
 		_ = filepath.WalkDir(rp.Absolute, func(p string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil { return nil }
-			if p == rp.Absolute { return nil }
+			if walkErr != nil {
+				return nil
+			}
+			if p == rp.Absolute {
+				return nil
+			}
 			seg := filepath.Base(p)
 			if !h.Cfg.ShowManifests && (seg == h.Cfg.ManifestFilename || seg == ".mountpad") {
-				if d.IsDir() { return filepath.SkipDir }
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			info, err := d.Info()
-			if err != nil { return nil }
+			if err != nil {
+				return nil
+			}
 			// Symlinks found mid-walk weren't independently vetted
 			// by Resolve. Two-tier policy mirrors the entry-point:
 			//   (a) when the effective MOUNTPAD_FOLLOW_SYMLINK is
@@ -604,10 +743,16 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 			// - so a symlinked dir is at most stored as an empty
 			// entry.
 			if info.Mode()&os.ModeSymlink != 0 {
-				if !h.followSymlinks(mp) { return nil }
+				if !h.followSymlinks(mp) {
+					return nil
+				}
 				evaled, evalErr := filepath.EvalSymlinks(p)
-				if evalErr != nil { return nil }
-				if !filesystem.PathContains(rp.MountRoot, evaled) { return nil }
+				if evalErr != nil {
+					return nil
+				}
+				if !filesystem.PathContains(rp.MountRoot, evaled) {
+					return nil
+				}
 				// Replace the symlink's Lstat info with the
 				// target's Stat info so the zip entry carries
 				// the real size/modtime instead of the symlink's
@@ -622,7 +767,9 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 			// list but can't read partially doesn't blow up the
 			// whole download.
 			if err := h.Resolver.Check(user, mc, p, info.IsDir(), acl.ActionRead); err != nil {
-				if info.IsDir() { return filepath.SkipDir }
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			rel, _ := filepath.Rel(rp.Absolute, p)
@@ -651,23 +798,40 @@ func (h *FSHandler) Download(w http.ResponseWriter, r *http.Request) {
 func (h *FSHandler) Raw(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rel := r.URL.Query().Get("path")
-	if err := h.rejectManifest(rel, user.IsAdmin); err != nil { h.writeError(w, err); return }
+	if err := h.rejectManifest(rel, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rp, err := h.resolve(r, mp, rel)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionRead); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	info, err := os.Stat(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if info.IsDir() {
-		http.Error(w, "not a file", http.StatusBadRequest); return
+		http.Error(w, "not a file", http.StatusBadRequest)
+		return
 	}
 
 	f, err := os.Open(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	defer f.Close()
 
 	// inline (vs attachment) tells the browser to render the bytes
@@ -720,16 +884,27 @@ func isThumbnailable(name string) bool {
 func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rel := r.URL.Query().Get("path")
-	if err := h.rejectManifest(rel, user.IsAdmin); err != nil { h.writeError(w, err); return }
+	if err := h.rejectManifest(rel, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	rp, err := h.resolve(r, mp, rel)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, false, acl.ActionRead); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	if !isThumbnailable(filepath.Base(rp.Absolute)) {
-		http.Error(w, "unsupported", http.StatusUnsupportedMediaType); return
+		http.Error(w, "unsupported", http.StatusUnsupportedMediaType)
+		return
 	}
 
 	size := 128
@@ -740,9 +915,13 @@ func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info, err := os.Stat(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if info.IsDir() {
-		http.Error(w, "not a file", http.StatusBadRequest); return
+		http.Error(w, "not a file", http.StatusBadRequest)
+		return
 	}
 	// 4 MiB source cap. Tuneable; chosen so we cover the typical
 	// "photo from a phone" range while keeping per-request decode
@@ -750,7 +929,8 @@ func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
 	// frontend treats as "fall back to the emoji icon".
 	const maxSourceBytes = 4 * 1024 * 1024
 	if info.Size() > maxSourceBytes {
-		http.Error(w, "source too large", http.StatusUnsupportedMediaType); return
+		http.Error(w, "source too large", http.StatusUnsupportedMediaType)
+		return
 	}
 
 	// ETag scopes by path + requested size + source mtime so the
@@ -766,19 +946,25 @@ func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
 	// without re-decoding.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
-		w.WriteHeader(http.StatusNotModified); return
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 
 	f, err := os.Open(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	defer f.Close()
 
 	thumb, err := imaging.Thumbnail(f, size)
 	if err != nil {
 		if errors.Is(err, imaging.ErrUnsupported) {
-			http.Error(w, "unsupported", http.StatusUnsupportedMediaType); return
+			http.Error(w, "unsupported", http.StatusUnsupportedMediaType)
+			return
 		}
-		http.Error(w, "thumbnail failed", http.StatusInternalServerError); return
+		http.Error(w, "thumbnail failed", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Content-Length", strconv.Itoa(len(thumb)))
@@ -791,7 +977,10 @@ func (h *FSHandler) Thumb(w http.ResponseWriter, r *http.Request) {
 // resumably and the browser can show real progress).
 func streamFileAttachment(w http.ResponseWriter, absPath, name string, info os.FileInfo) {
 	f, err := os.Open(absPath)
-	if err != nil { http.Error(w, "open failed", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "open failed", http.StatusInternalServerError)
+		return
+	}
 	defer f.Close()
 	w.Header().Set("Content-Disposition", contentDisposition(name))
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -803,20 +992,26 @@ func streamFileAttachment(w http.ResponseWriter, absPath, name string, info os.F
 // survive the round-trip.
 func writeZipFile(zw *zip.Writer, srcAbs, zipPath string, info os.FileInfo) error {
 	hdr, err := zip.FileInfoHeader(info)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	hdr.Name = zipPath
 	hdr.Method = zip.Deflate
 	dst, err := zw.CreateHeader(hdr)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	src, err := os.Open(srcAbs)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer src.Close()
 	_, err = io.Copy(dst, src)
 	return err
 }
 
 // contentDisposition builds a header value that survives unicode
-// filenames. RFC 5987 `filename*=UTF-8''<pct-encoded>` is the format
+// filenames. RFC 5987 `filename*=UTF-8”<pct-encoded>` is the format
 // every modern browser respects; we also send a `filename=` ASCII
 // fallback for the very long tail of older clients.
 func contentDisposition(name string) string {
@@ -834,26 +1029,46 @@ func (h *FSHandler) DeepDelete(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p deletePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.loadMount(r); if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
-	rp, err := h.resolve(r, mp, p.Path); if err != nil { h.writeError(w, err); return }
+	mp, err := h.loadMount(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	rp, err := h.resolve(r, mp, p.Path)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if rp.IsMountRoot {
-		h.writeError(w, acl.ErrDenied); return
+		h.writeError(w, acl.ErrDenied)
+		return
 	}
 
 	mc := mountpoints.MountContext(mp)
 	if err := h.Resolver.Check(user, mc, filepath.Dir(rp.Absolute), true, acl.ActionDelete); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	walkErr := filesystem.Walk(rp.Absolute, func(p string, info os.FileInfo) error {
 		return h.Resolver.Check(user, mc, p, info.IsDir(), acl.ActionDelete)
 	})
-	if walkErr != nil { h.writeError(w, walkErr); return }
+	if walkErr != nil {
+		h.writeError(w, walkErr)
+		return
+	}
 
-	if err := filesystem.DeleteDirRecursive(rp.Absolute); err != nil { h.writeError(w, err); return }
+	if err := filesystem.DeleteDirRecursive(rp.Absolute); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	_ = h.Manifest.DeleteEntry(filepath.Dir(rp.Absolute), filepath.Base(rp.Absolute))
 	writeJSON(w, http.StatusOK, map[string]any{"deep_deleted": rp.Relative})
 }
@@ -878,35 +1093,45 @@ func (h *FSHandler) DeepDelete(w http.ResponseWriter, r *http.Request) {
 func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	dirRel := r.URL.Query().Get("path")
 	dirRP, err := h.resolve(r, mp, dirRel)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	// Verify the target is actually a directory; otherwise the
 	// first temp-file rename would land at a sibling path, which is
 	// almost certainly not what the operator intended.
 	if info, err := os.Stat(dirRP.Absolute); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	} else if !info.IsDir() {
-		http.Error(w, "target is not a directory", http.StatusBadRequest); return
+		http.Error(w, "target is not a directory", http.StatusBadRequest)
+		return
 	}
 
 	mc := mountpoints.MountContext(mp)
 	if err := h.Resolver.Check(user, mc, dirRP.Absolute, true, acl.ActionCreate); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	reader, err := r.MultipartReader()
 	if err != nil {
-		http.Error(w, "expected multipart/form-data", http.StatusBadRequest); return
+		http.Error(w, "expected multipart/form-data", http.StatusBadRequest)
+		return
 	}
 
 	type fileResult struct {
 		Name   string `json:"name"`
 		Size   int64  `json:"size,omitempty"`
-		Status string `json:"status"`           // "uploaded" | "conflict" | "error"
+		Status string `json:"status"` // "uploaded" | "conflict" | "error"
 		Error  string `json:"error,omitempty"`
 	}
 	results := []fileResult{}
@@ -977,8 +1202,8 @@ func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path":    dirRP.Relative,
-		"files":   results,
+		"path":  dirRP.Relative,
+		"files": results,
 	})
 }
 
@@ -1043,43 +1268,62 @@ func (h *FSHandler) Extract(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p extractPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
 
 	mp, err := h.loadMount(r)
-	if err != nil { h.writeError(w, err); return }
-	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	if err := h.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	rp, err := h.resolve(r, mp, p.Path)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 
 	mc := mountpoints.MountContext(mp)
 	if err := h.Resolver.Check(user, mc, rp.Absolute, false, acl.ActionRead); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 	parentAbs := filepath.Dir(rp.Absolute)
 	if err := h.Resolver.Check(user, mc, parentAbs, true, acl.ActionCreate); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	info, err := os.Stat(rp.Absolute)
-	if err != nil { h.writeError(w, err); return }
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	if info.IsDir() {
-		http.Error(w, "not an archive", http.StatusBadRequest); return
+		http.Error(w, "not an archive", http.StatusBadRequest)
+		return
 	}
 
 	destAbs := filepath.Join(parentAbs, archiveDestName(filepath.Base(rp.Absolute)))
 	if _, err := os.Lstat(destAbs); err == nil {
-		http.Error(w, "destination already exists", http.StatusConflict); return
+		http.Error(w, "destination already exists", http.StatusConflict)
+		return
 	}
 
 	kind := archiveKind(rp.Absolute)
 	if kind == "" {
-		http.Error(w, "unsupported archive format", http.StatusBadRequest); return
+		http.Error(w, "unsupported archive format", http.StatusBadRequest)
+		return
 	}
 
 	if err := os.Mkdir(destAbs, 0o755); err != nil {
-		h.writeError(w, err); return
+		h.writeError(w, err)
+		return
 	}
 
 	count, extractErr := extractArchive(rp.Absolute, destAbs, kind)
@@ -1094,9 +1338,9 @@ func (h *FSHandler) Extract(w http.ResponseWriter, r *http.Request) {
 
 	destRel := relativeTo(mp.HostPath, destAbs)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"archive":      rp.Relative,
-		"destination":  destRel,
-		"entry_count":  count,
+		"archive":     rp.Relative,
+		"destination": destRel,
+		"entry_count": count,
 	})
 }
 
@@ -1149,20 +1393,28 @@ func extractArchive(archivePath, destRoot, kind string) (int, error) {
 		return extractZip(archivePath, destRoot)
 	case "tar":
 		f, err := os.Open(archivePath)
-		if err != nil { return 0, err }
+		if err != nil {
+			return 0, err
+		}
 		defer f.Close()
 		return extractTar(f, destRoot)
 	case "tar.gz":
 		f, err := os.Open(archivePath)
-		if err != nil { return 0, err }
+		if err != nil {
+			return 0, err
+		}
 		defer f.Close()
 		gz, err := gzip.NewReader(f)
-		if err != nil { return 0, err }
+		if err != nil {
+			return 0, err
+		}
 		defer gz.Close()
 		return extractTar(gz, destRoot)
 	case "tar.bz2":
 		f, err := os.Open(archivePath)
-		if err != nil { return 0, err }
+		if err != nil {
+			return 0, err
+		}
 		defer f.Close()
 		return extractTar(bzip2.NewReader(f), destRoot)
 	default:
@@ -1177,7 +1429,9 @@ func extractArchive(archivePath, destRoot, kind string) (int, error) {
 // dir entry before its children).
 func extractZip(archivePath, destRoot string) (int, error) {
 	zr, err := zip.OpenReader(archivePath)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	defer zr.Close()
 
 	count := 0
@@ -1187,17 +1441,28 @@ func extractZip(archivePath, destRoot string) (int, error) {
 			continue
 		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return count, err
+			}
 			filesystem.InheritOwnership(dest, destRoot)
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return count, err
+		}
 		rc, err := f.Open()
-		if err != nil { return count, err }
+		if err != nil {
+			return count, err
+		}
 		out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-		if err != nil { rc.Close(); return count, err }
+		if err != nil {
+			rc.Close()
+			return count, err
+		}
 		if _, err := io.Copy(out, rc); err != nil {
-			out.Close(); rc.Close(); return count, err
+			out.Close()
+			rc.Close()
+			return count, err
 		}
 		out.Close()
 		rc.Close()
@@ -1218,20 +1483,33 @@ func extractTar(r io.Reader, destRoot string) (int, error) {
 	count := 0
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF { break }
-		if err != nil { return count, err }
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return count, err
+		}
 		dest, err := safeJoin(destRoot, hdr.Name)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(dest, 0o755); err != nil { return count, err }
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return count, err
+			}
 			filesystem.InheritOwnership(dest, destRoot)
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { return count, err }
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return count, err
+			}
 			out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-			if err != nil { return count, err }
+			if err != nil {
+				return count, err
+			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close(); return count, err
+				out.Close()
+				return count, err
 			}
 			out.Close()
 			filesystem.InheritOwnership(dest, destRoot)

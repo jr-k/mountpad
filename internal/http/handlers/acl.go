@@ -32,20 +32,35 @@ func NewACLHandler(cfg *config.Config, m *repositories.MountPointsRepo, mf *mani
 func (h *ACLHandler) Get(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	mp, err := h.FS.loadMount(r)
-	if err != nil { h.FS.writeError(w, err); return }
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	rel := r.URL.Query().Get("path")
-	if err := h.FS.rejectManifest(rel, user.IsAdmin); err != nil { h.FS.writeError(w, err); return }
+	if err := h.FS.rejectManifest(rel, user.IsAdmin); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	rp, err := h.FS.resolve(r, mp, rel)
-	if err != nil { h.FS.writeError(w, err); return }
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 
 	isDir := true
-	if info, err := os.Lstat(rp.Absolute); err == nil { isDir = info.IsDir() }
+	if info, err := os.Lstat(rp.Absolute); err == nil {
+		isDir = info.IsDir()
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, isDir, acl.ActionRead); err != nil {
-		h.FS.writeError(w, err); return
+		h.FS.writeError(w, err)
+		return
 	}
 
 	eff, err := h.Resolver.Resolve(mountpoints.MountContext(mp), rp.Absolute)
-	if err != nil { h.FS.writeError(w, err); return }
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":     rp.Relative,
 		"owner_id": eff.OwnerID,
@@ -66,16 +81,35 @@ func (h *ACLHandler) Set(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p setACLPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.FS.loadMount(r); if err != nil { h.FS.writeError(w, err); return }
-	if err := h.FS.rejectManifest(p.Path, user.IsAdmin); err != nil { h.FS.writeError(w, err); return }
-	rp, err := h.FS.resolve(r, mp, p.Path); if err != nil { h.FS.writeError(w, err); return }
+	if p.Mode != nil && *p.Mode > 0o777 {
+		http.Error(w, "mode must be between 000 and 0777", http.StatusBadRequest)
+		return
+	}
+	mp, err := h.FS.loadMount(r)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if err := h.FS.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rp, err := h.FS.resolve(r, mp, p.Path)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, true, acl.ActionChmod); err != nil {
-		h.FS.writeError(w, err); return
+		h.FS.writeError(w, err)
+		return
 	}
 	h.upsert(w, mp, rp.Absolute, func(e *manifests.Entry) {
-		if p.Mode != nil { e.Mode = *p.Mode & 0o777 }
+		if p.Mode != nil {
+			e.Mode = *p.Mode
+		}
 	})
 }
 
@@ -87,14 +121,29 @@ type chownPayload struct {
 // PATCH /api/fs/{mountId}/owner  (admin only)
 func (h *ACLHandler) Chown(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
-	if !user.IsAdmin { h.FS.writeError(w, acl.ErrDenied); return }
+	if !user.IsAdmin {
+		h.FS.writeError(w, acl.ErrDenied)
+		return
+	}
 	var p chownPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.FS.loadMount(r); if err != nil { h.FS.writeError(w, err); return }
-	if err := h.FS.rejectManifest(p.Path, true); err != nil { h.FS.writeError(w, err); return }
-	rp, err := h.FS.resolve(r, mp, p.Path); if err != nil { h.FS.writeError(w, err); return }
+	mp, err := h.FS.loadMount(r)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if err := h.FS.rejectManifest(p.Path, true); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rp, err := h.FS.resolve(r, mp, p.Path)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	h.upsert(w, mp, rp.Absolute, func(e *manifests.Entry) {
 		e.OwnerID = p.OwnerID
 	})
@@ -110,13 +159,26 @@ func (h *ACLHandler) Chgrp(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFrom(r.Context())
 	var p chgrpPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
-	mp, err := h.FS.loadMount(r); if err != nil { h.FS.writeError(w, err); return }
-	if err := h.FS.rejectManifest(p.Path, user.IsAdmin); err != nil { h.FS.writeError(w, err); return }
-	rp, err := h.FS.resolve(r, mp, p.Path); if err != nil { h.FS.writeError(w, err); return }
+	mp, err := h.FS.loadMount(r)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if err := h.FS.rejectManifest(p.Path, user.IsAdmin); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rp, err := h.FS.resolve(r, mp, p.Path)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 	if err := h.Resolver.Check(user, mountpoints.MountContext(mp), rp.Absolute, true, acl.ActionChown); err != nil {
-		h.FS.writeError(w, err); return
+		h.FS.writeError(w, err)
+		return
 	}
 	h.upsert(w, mp, rp.Absolute, func(e *manifests.Entry) {
 		e.GroupID = p.GroupID
@@ -131,11 +193,20 @@ func (h *ACLHandler) upsert(w http.ResponseWriter, mp *models.MountPoint, absPat
 	base := filepath.Base(absPath)
 
 	info, err := os.Lstat(absPath)
-	if err != nil { h.FS.writeError(w, err); return }
-	if info.Mode()&os.ModeSymlink != 0 { h.FS.writeError(w, filesystem.ErrSymlinkNotAllowed); return }
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		h.FS.writeError(w, filesystem.ErrSymlinkNotAllowed)
+		return
+	}
 
 	eff, err := h.Resolver.Resolve(mountpoints.MountContext(mp), absPath)
-	if err != nil { h.FS.writeError(w, err); return }
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
 
 	entry := manifests.Entry{
 		Type:    entryType(info),
@@ -145,7 +216,8 @@ func (h *ACLHandler) upsert(w http.ResponseWriter, mp *models.MountPoint, absPat
 	}
 	mutate(&entry)
 	if err := h.Manifest.UpsertEntry(parent, base, entry); err != nil {
-		h.FS.writeError(w, err); return
+		h.FS.writeError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":     filepath.ToSlash(filepath.Join(filepath.Base(filepath.Dir(absPath)), base)),
@@ -157,6 +229,8 @@ func (h *ACLHandler) upsert(w http.ResponseWriter, mp *models.MountPoint, absPat
 }
 
 func entryType(info os.FileInfo) manifests.EntryType {
-	if info.IsDir() { return manifests.EntryDir }
+	if info.IsDir() {
+		return manifests.EntryDir
+	}
 	return manifests.EntryFile
 }

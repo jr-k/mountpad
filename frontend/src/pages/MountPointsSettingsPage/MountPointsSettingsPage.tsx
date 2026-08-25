@@ -99,6 +99,10 @@ const MountPointsSettingsPage: React.FC = () => {
   const [mounts, setMounts] = useState<MountPoint[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [groups, setGroups] = useState<Group[]>([])
+  const [loadingMounts, setLoadingMounts] = useState(true)
+  const [mountsLoadError, setMountsLoadError] = useState<string | null>(null)
+  const [usersDirectoryError, setUsersDirectoryError] = useState<string | null>(null)
+  const [groupsDirectoryError, setGroupsDirectoryError] = useState<string | null>(null)
 
   // `null` = modal closed. `'new'` = creating. A MountPoint value = editing it.
   const [editing, setEditing] = useState<MountPoint | 'new' | null>(null)
@@ -118,9 +122,24 @@ const MountPointsSettingsPage: React.FC = () => {
 
   const load = async () => setMounts((await api.get<MountPoint[] | null>('/api/mount-points')) ?? [])
   useEffect(() => {
-    void load()
-    void api.get<User[] | null>('/api/users').then((list) => setUsers(list ?? []))
-    void api.get<Group[] | null>('/api/groups').then((list) => setGroups(list ?? []))
+    void (async () => {
+      const [mountsResult, usersResult, groupsResult] = await Promise.allSettled([
+        api.get<MountPoint[] | null>('/api/mount-points'),
+        api.get<User[] | null>('/api/users'),
+        api.get<Group[] | null>('/api/groups'),
+      ])
+      if (mountsResult.status === 'fulfilled') {
+        setMounts(mountsResult.value ?? [])
+      } else {
+        const error = mountsResult.reason
+        setMountsLoadError(error instanceof HttpError && error.body ? error.body : 'Unable to load mount settings.')
+      }
+      if (usersResult.status === 'fulfilled') setUsers(usersResult.value ?? [])
+      else setUsersDirectoryError('User choices could not be loaded.')
+      if (groupsResult.status === 'fulfilled') setGroups(groupsResult.value ?? [])
+      else setGroupsDirectoryError('Group choices could not be loaded.')
+      setLoadingMounts(false)
+    })()
   }, [])
 
   const usersById = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
@@ -166,12 +185,15 @@ const MountPointsSettingsPage: React.FC = () => {
     setBusy(true); setErr(null)
     try {
       if (editing === 'new') {
-        await api.post('/api/mount-points', form)
+        const created = await api.post<MountPoint>('/api/mount-points', form)
+        setMounts((current) => [...current, created].sort((a, b) => a.slug.localeCompare(b.slug)))
       } else {
-        await api.patch(`/api/mount-points/${editing.id}`, form)
+        const updated = await api.patch<MountPoint>(`/api/mount-points/${editing.id}`, form)
+        setMounts((current) => current
+          .map((mount) => mount.id === updated.id ? updated : mount)
+          .sort((a, b) => a.slug.localeCompare(b.slug)))
       }
       closeForm()
-      await load()
     } catch (e: unknown) {
       setErr(e instanceof HttpError && e.body ? e.body : 'Save failed.')
     } finally { setBusy(false) }
@@ -238,9 +260,11 @@ const MountPointsSettingsPage: React.FC = () => {
                 {mounts.length === 0 ? (
                   <SP.EmptyRow>
                     <td colSpan={7}>
-                      <b>No mounts yet</b>
-                      Define your first one to start exposing files. A typical setup mounts
-                      <code> /storage</code> as the root pad.
+                      <b>{loadingMounts ? 'Loading mounts…' : mountsLoadError ? 'Unable to load mounts' : 'No mounts yet'}</b>
+                      {mountsLoadError ?? <>
+                        Define your first one to start exposing files. A typical setup mounts
+                        <code> /storage</code> as the root pad.
+                      </>}
                     </td>
                   </SP.EmptyRow>
                 ) : (
@@ -323,7 +347,7 @@ const MountPointsSettingsPage: React.FC = () => {
           <Modal
             open={editing !== null}
             title={editing === 'new' ? 'New mount point' : `Edit · ${typeof editing === 'object' ? editing?.slug : ''}`}
-            onClose={closeForm}
+            onClose={() => { if (!busy) closeForm() }}
             onSubmit={() => { if (!busy) void submit() }}
             footer={<>
               <Button variant="ghost" onClick={closeForm} disabled={busy}>Cancel</Button>
@@ -332,6 +356,7 @@ const MountPointsSettingsPage: React.FC = () => {
               </Button>
             </>}
           >
+            <fieldset disabled={busy} style={{ display: 'contents' }}>
             <SP.HelpText>
               {editing === 'new'
                 ? 'Define a new named entry point onto the host filesystem. All fields except description are required.'
@@ -379,6 +404,7 @@ const MountPointsSettingsPage: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <Select
                 label="Default owner"
+                disabled={!!usersDirectoryError}
                 value={form.default_owner_id ?? ''}
                 onChange={(e) => setForm({ ...form, default_owner_id: e.target.value ? Number(e.target.value) : null })}
                 options={[
@@ -391,6 +417,7 @@ const MountPointsSettingsPage: React.FC = () => {
               />
               <Select
                 label="Default group"
+                disabled={!!groupsDirectoryError}
                 value={form.default_group_id ?? ''}
                 onChange={(e) => setForm({ ...form, default_group_id: e.target.value ? Number(e.target.value) : null })}
                 options={[
@@ -402,6 +429,11 @@ const MountPointsSettingsPage: React.FC = () => {
             <SP.HelpText>
               Access follows Linux semantics: the owner uses the first rwx triplet, members of the group use the second, and everyone else uses the third.
             </SP.HelpText>
+            {(usersDirectoryError || groupsDirectoryError) && (
+              <SP.HelpText style={{ color: t.color.danger }}>
+                {[usersDirectoryError, groupsDirectoryError].filter(Boolean).join(' ')} Reload before changing the unavailable ownership field.
+              </SP.HelpText>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
               <span style={{ fontSize: 12, color: t.color.textMuted }}>Avatar</span>
@@ -497,6 +529,7 @@ const MountPointsSettingsPage: React.FC = () => {
                 color: t.color.danger, fontSize: 13, fontFamily: t.font.mono,
               }}>{err}</div>
             )}
+            </fieldset>
           </Modal>
 
           <HostPathPicker

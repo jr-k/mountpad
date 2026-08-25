@@ -14,7 +14,7 @@ type MountPointsRepo struct{ DB *db.DB }
 func NewMountPointsRepo(d *db.DB) *MountPointsRepo { return &MountPointsRepo{DB: d} }
 
 // Keep this column list synchronised with `scanMP`. avatar_color was
-// added in migration 0003 (default '' server-side) and
+// added in migration 0003 (default ” server-side) and
 // follow_symlinks in migration 0004 (default TRUE server-side), so
 // old rows scan cleanly with their defaults.
 const mpCols = "id, slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, follow_symlinks, created_at, updated_at"
@@ -119,6 +119,43 @@ func (r *MountPointsRepo) Update(ctx context.Context, m *models.MountPoint) erro
 	_, err := r.DB.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
 		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks, m.ID)
 	return err
+}
+
+func (r *MountPointsRepo) UpdateAtomic(ctx context.Context, id int64, mutate func(*models.MountPoint) error) (*models.MountPoint, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	q := r.DB.Placeholder("SELECT " + mpCols + " FROM mount_points WHERE id = ?")
+	if r.DB.Driver == "postgres" {
+		q += " FOR UPDATE"
+	}
+	m, err := scanMP(tx.QueryRowContext(ctx, q, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, db.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := mutate(m); err != nil {
+		return nil, err
+	}
+
+	q = r.DB.Placeholder(`UPDATE mount_points SET
+		slug = ?, name = ?, description = ?, host_path = ?, is_active = ?,
+		default_owner_id = ?, default_group_id = ?, default_mode = ?,
+		avatar_color = ?, follow_symlinks = ?,
+		updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+	if _, err := tx.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks, m.ID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (r *MountPointsRepo) Delete(ctx context.Context, id int64) error {

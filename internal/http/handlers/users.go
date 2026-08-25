@@ -1,14 +1,15 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mountpad/mountpad/internal/auth"
+	"github.com/mountpad/mountpad/internal/db"
 	"github.com/mountpad/mountpad/internal/models"
 	"github.com/mountpad/mountpad/internal/repositories"
 )
@@ -18,11 +19,6 @@ type UsersHandler struct {
 }
 
 func NewUsersHandler(r *repositories.UsersRepo) *UsersHandler { return &UsersHandler{Repo: r} }
-
-func (h *UsersHandler) hasOnlyOneActiveAdmin(ctx context.Context) (bool, error) {
-	count, err := h.Repo.CountActiveAdmins(ctx)
-	return count <= 1, err
-}
 
 func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.Repo.List(r.Context())
@@ -118,37 +114,10 @@ type updateUserPayload struct {
 	Password    *string `json:"password,omitempty"`
 }
 
-// applyProfile mutates `u` with whatever profile fields the payload set.
-// Admin / activity fields are intentionally left out: they live on `Update`
-// directly so we can reuse this helper from both the admin endpoint and
-// the self-update endpoint without leaking elevation.
-func applyProfile(u *models.User, p *updateUserPayload) {
-	if p.DisplayName != nil {
-		u.DisplayName = *p.DisplayName
-	}
-	if p.FirstName != nil {
-		u.FirstName = *p.FirstName
-	}
-	if p.LastName != nil {
-		u.LastName = *p.LastName
-	}
-	if p.Email != nil {
-		u.Email = *p.Email
-	}
-	if p.AvatarColor != nil {
-		u.AvatarColor = *p.AvatarColor
-	}
-}
-
 func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	u, err := h.Repo.GetByID(r.Context(), id)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	var p updateUserPayload
@@ -156,36 +125,32 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	wasActiveAdmin := u.IsAdmin && u.IsActive
-	applyProfile(u, &p)
-	if p.IsAdmin != nil {
-		u.IsAdmin = *p.IsAdmin
-	}
-	if p.IsActive != nil {
-		u.IsActive = *p.IsActive
-	}
-	if wasActiveAdmin && (!u.IsAdmin || !u.IsActive) {
-		last, err := h.hasOnlyOneActiveAdmin(r.Context())
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if last {
-			http.Error(w, "the last active administrator cannot be demoted or disabled", http.StatusConflict)
-			return
-		}
-	}
-	if err := h.Repo.Update(r.Context(), u); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+	var passwordHash *string
 	if p.Password != nil && *p.Password != "" {
 		hash, err := auth.HashPassword(*p.Password)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		_ = h.Repo.UpdatePassword(r.Context(), u.ID, hash)
+		passwordHash = &hash
+	}
+	changes := repositories.UserChanges{
+		DisplayName: p.DisplayName, FirstName: p.FirstName, LastName: p.LastName,
+		Email: p.Email, AvatarColor: p.AvatarColor,
+		IsAdmin: p.IsAdmin, IsActive: p.IsActive, PasswordHash: passwordHash,
+	}
+	u, err := h.Repo.UpdateAtomic(r.Context(), id, changes)
+	if err != nil {
+		if errors.Is(err, repositories.ErrLastActiveAdmin) {
+			http.Error(w, "the last active administrator cannot be demoted or disabled", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, http.StatusOK, u)
 }
@@ -202,30 +167,34 @@ func (h *UsersHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	u, err := h.Repo.GetByID(r.Context(), caller.ID)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
 	var p updateUserPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	applyProfile(u, &p)
 	// Self-update never touches is_admin / is_active even if the payload
 	// includes them.
-	if err := h.Repo.Update(r.Context(), u); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+	var passwordHash *string
 	if p.Password != nil && *p.Password != "" {
 		hash, err := auth.HashPassword(*p.Password)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		_ = h.Repo.UpdatePassword(r.Context(), u.ID, hash)
+		passwordHash = &hash
+	}
+	changes := repositories.UserChanges{
+		DisplayName: p.DisplayName, FirstName: p.FirstName, LastName: p.LastName,
+		Email: p.Email, AvatarColor: p.AvatarColor, PasswordHash: passwordHash,
+	}
+	u, err := h.Repo.UpdateAtomic(r.Context(), caller.ID, changes)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, http.StatusOK, u)
 }
@@ -236,23 +205,15 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	u, err := h.Repo.GetByID(r.Context(), id)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if u.IsAdmin && u.IsActive {
-		last, err := h.hasOnlyOneActiveAdmin(r.Context())
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if last {
+	if err := h.Repo.DeleteAtomic(r.Context(), id); err != nil {
+		if errors.Is(err, repositories.ErrLastActiveAdmin) {
 			http.Error(w, "the last active administrator cannot be deleted", http.StatusConflict)
 			return
 		}
-	}
-	if err := h.Repo.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -261,6 +222,40 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 type addToGroupPayload struct {
 	GroupID int64 `json:"group_id"`
+}
+
+type replaceGroupsPayload struct {
+	GroupIDs *[]int64 `json:"group_ids"`
+}
+
+func (h *UsersHandler) ReplaceGroups(w http.ResponseWriter, r *http.Request) {
+	uid, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var p replaceGroupsPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if p.GroupIDs == nil {
+		http.Error(w, "group_ids is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Repo.ReplaceGroups(r.Context(), uid, *p.GroupIDs); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if db.IsForeignKeyViolation(err) || db.IsUniqueViolation(err) {
+			http.Error(w, "invalid group_ids", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *UsersHandler) AddToGroup(w http.ResponseWriter, r *http.Request) {
