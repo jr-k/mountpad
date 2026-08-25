@@ -42,9 +42,6 @@ func (s *Service) Create(ctx context.Context, m *models.MountPoint) error {
 	if !filepath.IsAbs(m.HostPath) {
 		return ErrHostPath
 	}
-	if m.DefaultMode == 0 {
-		m.DefaultMode = acl.UserR | acl.UserW | acl.UserX | acl.GroupR | acl.GroupX
-	}
 	return s.Repo.Create(ctx, m)
 }
 

@@ -4,6 +4,7 @@ import { usePage } from '@inertiajs/react'
 import { AppShell } from '@/layouts/AppShell'
 import { Button } from '@/components/Button'
 import { Input } from '@/components/Input'
+import { Select } from '@/components/Select'
 import { Modal } from '@/components/Modal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Logo } from '@/components/Logo'
@@ -14,6 +15,7 @@ import { HostPathPicker } from '@/components/HostPathPicker'
 import { api, HttpError } from '@/lib/api'
 import { formatMode, modeToOctal } from '@/lib/permissions'
 import type { MountPoint } from '@/types/files'
+import type { Group, User } from '@/types/users'
 import type { SharedProps } from '@/types/inertia'
 import type { Theme } from '@/styles/theme'
 import { SP } from '@/layouts/SettingsPage'
@@ -42,6 +44,8 @@ interface MountForm {
   description: string
   host_path: string
   is_active: boolean
+  default_owner_id: number | null
+  default_group_id: number | null
   default_mode: number
   /** Empty string = use the deterministic palette derived from the id. */
   avatar_color: string
@@ -51,7 +55,8 @@ interface MountForm {
 
 const emptyForm: MountForm = {
   slug: '', name: '', description: '', host_path: '',
-  is_active: true, default_mode: 0o750, avatar_color: '',
+  is_active: true, default_owner_id: null, default_group_id: null,
+  default_mode: 0o750, avatar_color: '',
   follow_symlinks: true,
 }
 
@@ -61,6 +66,8 @@ const formFromMount = (m: MountPoint): MountForm => ({
   description: m.description,
   host_path: m.host_path,
   is_active: m.is_active,
+  default_owner_id: m.default_owner_id ?? null,
+  default_group_id: m.default_group_id ?? null,
   default_mode: m.default_mode,
   avatar_color: m.avatar_color ?? '',
   // Default to true for legacy rows that may not yet have the
@@ -90,6 +97,8 @@ const MountPointsSettingsPage: React.FC = () => {
   const { props } = usePage<SharedProps & Record<string, unknown>>()
   const globalFollowSymlinks = !!props.app?.follow_symlinks
   const [mounts, setMounts] = useState<MountPoint[]>([])
+  const [users, setUsers] = useState<User[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
 
   // `null` = modal closed. `'new'` = creating. A MountPoint value = editing it.
   const [editing, setEditing] = useState<MountPoint | 'new' | null>(null)
@@ -108,7 +117,14 @@ const MountPointsSettingsPage: React.FC = () => {
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const load = async () => setMounts((await api.get<MountPoint[] | null>('/api/mount-points')) ?? [])
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    void load()
+    void api.get<User[] | null>('/api/users').then((list) => setUsers(list ?? []))
+    void api.get<Group[] | null>('/api/groups').then((list) => setGroups(list ?? []))
+  }, [])
+
+  const usersById = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
+  const groupsById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups])
 
   const openNew = () => {
     setForm(emptyForm)
@@ -212,6 +228,7 @@ const MountPointsSettingsPage: React.FC = () => {
                   <th>#</th>
                   <th>Name</th>
                   <th>Host path</th>
+                  <th>Owner / group</th>
                   <th>Default mode</th>
                   <th>Status</th>
                   <th />
@@ -220,7 +237,7 @@ const MountPointsSettingsPage: React.FC = () => {
               <tbody>
                 {mounts.length === 0 ? (
                   <SP.EmptyRow>
-                    <td colSpan={6}>
+                    <td colSpan={7}>
                       <b>No mounts yet</b>
                       Define your first one to start exposing files. A typical setup mounts
                       <code> /storage</code> as the root pad.
@@ -255,6 +272,18 @@ const MountPointsSettingsPage: React.FC = () => {
                         </div>
                       </td>
                       <td><code>{m.host_path}</code></td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          <span>
+                            <SP.Faint>user </SP.Faint>
+                            <code>{m.default_owner_id ? usersById.get(m.default_owner_id)?.username ?? `#${m.default_owner_id}` : '-'}</code>
+                          </span>
+                          <span>
+                            <SP.Faint>group </SP.Faint>
+                            <code>{m.default_group_id ? groupsById.get(m.default_group_id)?.name ?? `#${m.default_group_id}` : '-'}</code>
+                          </span>
+                        </div>
+                      </td>
                       <td>
                         {/* Symbolic rwx triplets first (the operator-friendly
                             view: owner, group, others) then the octal in
@@ -346,6 +375,33 @@ const MountPointsSettingsPage: React.FC = () => {
               </SP.PathRow>
             </SP.Field>
             <Input label="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+              <Select
+                label="Default owner"
+                value={form.default_owner_id ?? ''}
+                onChange={(e) => setForm({ ...form, default_owner_id: e.target.value ? Number(e.target.value) : null })}
+                options={[
+                  { value: '', label: 'No owner' },
+                  ...users.map((u) => ({
+                    value: u.id,
+                    label: u.display_name ? `${u.username} · ${u.display_name}` : u.username,
+                  })),
+                ]}
+              />
+              <Select
+                label="Default group"
+                value={form.default_group_id ?? ''}
+                onChange={(e) => setForm({ ...form, default_group_id: e.target.value ? Number(e.target.value) : null })}
+                options={[
+                  { value: '', label: 'No group' },
+                  ...groups.map((g) => ({ value: g.id, label: g.name })),
+                ]}
+              />
+            </div>
+            <SP.HelpText>
+              Access follows Linux semantics: the owner uses the first rwx triplet, members of the group use the second, and everyone else uses the third.
+            </SP.HelpText>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
               <span style={{ fontSize: 12, color: t.color.textMuted }}>Avatar</span>

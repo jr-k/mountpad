@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -18,9 +19,17 @@ type UsersHandler struct {
 
 func NewUsersHandler(r *repositories.UsersRepo) *UsersHandler { return &UsersHandler{Repo: r} }
 
+func (h *UsersHandler) hasOnlyOneActiveAdmin(ctx context.Context) (bool, error) {
+	count, err := h.Repo.CountActiveAdmins(ctx)
+	return count <= 1, err
+}
+
 func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.Repo.List(r.Context())
-	if err != nil { http.Error(w, "internal error", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	for _, u := range list {
 		u.GroupIDs, _ = h.Repo.GroupIDsFor(r.Context(), u.ID)
 	}
@@ -40,7 +49,10 @@ type userDirectoryEntry struct {
 
 func (h *UsersHandler) Directory(w http.ResponseWriter, r *http.Request) {
 	list, err := h.Repo.List(r.Context())
-	if err != nil { http.Error(w, "internal error", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	out := make([]userDirectoryEntry, 0, len(list))
 	for _, u := range list {
 		out = append(out, userDirectoryEntry{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName})
@@ -62,13 +74,18 @@ type createUserPayload struct {
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var p createUserPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
 	if p.Username == "" || p.Password == "" {
-		http.Error(w, "username and password required", http.StatusBadRequest); return
+		http.Error(w, "username and password required", http.StatusBadRequest)
+		return
 	}
 	hash, err := auth.HashPassword(p.Password)
-	if err != nil { http.Error(w, "internal error", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	u := &models.User{
 		Username:     p.Username,
 		DisplayName:  p.DisplayName,
@@ -81,7 +98,8 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		IsActive:     true,
 	}
 	if err := h.Repo.Create(r.Context(), u); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, http.StatusCreated, u)
 }
@@ -105,31 +123,68 @@ type updateUserPayload struct {
 // directly so we can reuse this helper from both the admin endpoint and
 // the self-update endpoint without leaking elevation.
 func applyProfile(u *models.User, p *updateUserPayload) {
-	if p.DisplayName != nil { u.DisplayName = *p.DisplayName }
-	if p.FirstName != nil   { u.FirstName   = *p.FirstName }
-	if p.LastName != nil    { u.LastName    = *p.LastName }
-	if p.Email != nil       { u.Email       = *p.Email }
-	if p.AvatarColor != nil { u.AvatarColor = *p.AvatarColor }
+	if p.DisplayName != nil {
+		u.DisplayName = *p.DisplayName
+	}
+	if p.FirstName != nil {
+		u.FirstName = *p.FirstName
+	}
+	if p.LastName != nil {
+		u.LastName = *p.LastName
+	}
+	if p.Email != nil {
+		u.Email = *p.Email
+	}
+	if p.AvatarColor != nil {
+		u.AvatarColor = *p.AvatarColor
+	}
 }
 
 func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil { http.Error(w, "bad id", http.StatusBadRequest); return }
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	u, err := h.Repo.GetByID(r.Context(), id)
-	if err != nil { http.Error(w, "not found", http.StatusNotFound); return }
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	var p updateUserPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
+	wasActiveAdmin := u.IsAdmin && u.IsActive
 	applyProfile(u, &p)
-	if p.IsAdmin != nil { u.IsAdmin = *p.IsAdmin }
-	if p.IsActive != nil { u.IsActive = *p.IsActive }
+	if p.IsAdmin != nil {
+		u.IsAdmin = *p.IsAdmin
+	}
+	if p.IsActive != nil {
+		u.IsActive = *p.IsActive
+	}
+	if wasActiveAdmin && (!u.IsAdmin || !u.IsActive) {
+		last, err := h.hasOnlyOneActiveAdmin(r.Context())
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if last {
+			http.Error(w, "the last active administrator cannot be demoted or disabled", http.StatusConflict)
+			return
+		}
+	}
 	if err := h.Repo.Update(r.Context(), u); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	if p.Password != nil && *p.Password != "" {
 		hash, err := auth.HashPassword(*p.Password)
-		if err != nil { http.Error(w, "internal error", http.StatusInternalServerError); return }
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		_ = h.Repo.UpdatePassword(r.Context(), u.ID, hash)
 	}
 	writeJSON(w, http.StatusOK, u)
@@ -144,23 +199,32 @@ func (h *UsersHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	if caller == nil || auth.IsSynthetic(caller) {
 		// The synthetic SAFE_MODE admin is not a real DB row: we let the
 		// operator pick another account from the Access page instead.
-		http.Error(w, "forbidden", http.StatusForbidden); return
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 	u, err := h.Repo.GetByID(r.Context(), caller.ID)
-	if err != nil { http.Error(w, "not found", http.StatusNotFound); return }
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	var p updateUserPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
 	applyProfile(u, &p)
 	// Self-update never touches is_admin / is_active even if the payload
 	// includes them.
 	if err := h.Repo.Update(r.Context(), u); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	if p.Password != nil && *p.Password != "" {
 		hash, err := auth.HashPassword(*p.Password)
-		if err != nil { http.Error(w, "internal error", http.StatusInternalServerError); return }
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		_ = h.Repo.UpdatePassword(r.Context(), u.ID, hash)
 	}
 	writeJSON(w, http.StatusOK, u)
@@ -168,9 +232,29 @@ func (h *UsersHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil { http.Error(w, "bad id", http.StatusBadRequest); return }
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	u, err := h.Repo.GetByID(r.Context(), id)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if u.IsAdmin && u.IsActive {
+		last, err := h.hasOnlyOneActiveAdmin(r.Context())
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if last {
+			http.Error(w, "the last active administrator cannot be deleted", http.StatusConflict)
+			return
+		}
+	}
 	if err := h.Repo.Delete(r.Context(), id); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -181,24 +265,36 @@ type addToGroupPayload struct {
 
 func (h *UsersHandler) AddToGroup(w http.ResponseWriter, r *http.Request) {
 	uid, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil { http.Error(w, "bad id", http.StatusBadRequest); return }
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	var p addToGroupPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest); return
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
 	if err := h.Repo.AddGroup(r.Context(), uid, p.GroupID); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *UsersHandler) RemoveFromGroup(w http.ResponseWriter, r *http.Request) {
 	uid, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil { http.Error(w, "bad id", http.StatusBadRequest); return }
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	gid, err := strconv.ParseInt(chi.URLParam(r, "groupId"), 10, 64)
-	if err != nil { http.Error(w, "bad group id", http.StatusBadRequest); return }
+	if err != nil {
+		http.Error(w, "bad group id", http.StatusBadRequest)
+		return
+	}
 	if err := h.Repo.RemoveGroup(r.Context(), uid, gid); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError); return
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -122,6 +122,12 @@ func (r *UsersRepo) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
+func (r *UsersRepo) CountActiveAdmins(ctx context.Context) (int, error) {
+	var count int
+	err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE is_admin = TRUE AND is_active = TRUE").Scan(&count)
+	return count, err
+}
+
 func (r *UsersRepo) GroupIDsFor(ctx context.Context, userID int64) ([]int64, error) {
 	q := r.DB.Placeholder("SELECT group_id FROM user_groups WHERE user_id = ?")
 	rows, err := r.DB.QueryContext(ctx, q, userID)

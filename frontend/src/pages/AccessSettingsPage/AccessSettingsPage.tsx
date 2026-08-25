@@ -6,9 +6,9 @@ import { Button } from '@/components/Button'
 import { Input } from '@/components/Input'
 import { Modal } from '@/components/Modal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { Avatar, AVATAR_PALETTE } from '@/components/Avatar'
+import { Avatar, AvatarColorPicker, AVATAR_PALETTE } from '@/components/Avatar'
 import { RowMenu } from '@/components/RowMenu'
-import { api } from '@/lib/api'
+import { api, HttpError } from '@/lib/api'
 import type { User, Group } from '@/types/users'
 import type { SharedProps } from '@/types/inertia'
 import type { Theme } from '@/styles/theme'
@@ -63,6 +63,27 @@ const KeyIcon: React.FC = () => (
 )
 
 const emptyUserForm = { username: '', password: '', display_name: '', is_admin: false }
+interface EditUserForm {
+  display_name: string
+  first_name: string
+  last_name: string
+  email: string
+  avatar_color: string
+  is_admin: boolean
+  is_active: boolean
+  password: string
+}
+
+const userToEditForm = (user: User): EditUserForm => ({
+  display_name: user.display_name ?? '',
+  first_name: user.first_name ?? '',
+  last_name: user.last_name ?? '',
+  email: user.email ?? '',
+  avatar_color: user.avatar_color ?? '',
+  is_admin: user.is_admin,
+  is_active: user.is_active,
+  password: '',
+})
 // Empty `avatar_color` means "use the deterministic palette entry", which
 // matches the backend's convention for the column default.
 const emptyGroupForm = { name: '', description: '', avatar_color: '' }
@@ -74,9 +95,13 @@ const AccessSettingsPage: React.FC = () => {
   // Users
   const [users, setUsers] = useState<User[]>([])
   const [openNewUser, setOpenNewUser] = useState(false)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
   const [resetUser, setResetUser] = useState<User | null>(null)
   const [deleteUser, setDeleteUser] = useState<User | null>(null)
   const [userForm, setUserForm] = useState(emptyUserForm)
+  const [editUserForm, setEditUserForm] = useState<EditUserForm | null>(null)
+  const [savingUser, setSavingUser] = useState(false)
+  const [editUserError, setEditUserError] = useState<string | null>(null)
   const [resetPwd, setResetPwd] = useState('')
 
   // Groups
@@ -120,6 +145,35 @@ const AccessSettingsPage: React.FC = () => {
     setOpenNewUser(false)
     setUserForm(emptyUserForm)
     await loadUsers()
+  }
+
+  const openEditUser = (user: User) => {
+    setEditingUser(user)
+    setEditUserForm(userToEditForm(user))
+    setEditUserError(null)
+  }
+
+  const closeEditUser = () => {
+    setEditingUser(null)
+    setEditUserForm(null)
+    setSavingUser(false)
+    setEditUserError(null)
+  }
+
+  const submitEditUser = async () => {
+    if (!editingUser || !editUserForm) return
+    setSavingUser(true)
+    setEditUserError(null)
+    try {
+      const { password, ...profile } = editUserForm
+      await api.patch(`/api/users/${editingUser.id}`, password ? { ...profile, password } : profile)
+      closeEditUser()
+      await loadUsers()
+    } catch (error: unknown) {
+      setEditUserError(error instanceof HttpError && error.body ? error.body : 'Unable to save this user.')
+    } finally {
+      setSavingUser(false)
+    }
   }
 
   const submitResetUser = async () => {
@@ -302,9 +356,9 @@ const AccessSettingsPage: React.FC = () => {
                     <td style={{ width: 40, paddingRight: 0 }}>
                       <SP.AvatarButton
                         type="button"
-                        onClick={() => openManage(u)}
-                        title={`Manage groups for ${u.username}`}
-                        aria-label={`Manage groups for ${u.username}`}
+                        onClick={() => openEditUser(u)}
+                        title={`Edit ${u.username}`}
+                        aria-label={`Edit ${u.username}`}
                       >
                         <Avatar
                           id={u.id}
@@ -317,8 +371,8 @@ const AccessSettingsPage: React.FC = () => {
                     <td>
                       <SP.LinkCell
                         type="button"
-                        onClick={() => openManage(u)}
-                        title={`Manage groups for ${u.username}`}
+                        onClick={() => openEditUser(u)}
+                        title={`Edit ${u.username}`}
                       >
                         <code>{u.username}</code>
                       </SP.LinkCell>
@@ -328,8 +382,8 @@ const AccessSettingsPage: React.FC = () => {
                         ? (
                           <SP.LinkCell
                             type="button"
-                            onClick={() => openManage(u)}
-                            title={`Manage groups for ${u.username}`}
+                            onClick={() => openEditUser(u)}
+                            title={`Edit ${u.username}`}
                           >
                             {u.display_name}
                           </SP.LinkCell>
@@ -344,6 +398,7 @@ const AccessSettingsPage: React.FC = () => {
                         <RowMenu
                           label={`Actions for ${u.display_name || u.username}`}
                           items={[
+                            { key: 'edit',   label: 'Edit user',       icon: <EditIcon />,   onSelect: () => openEditUser(u) },
                             { key: 'groups', label: 'Manage groups',  icon: <GroupsIcon />, onSelect: () => openManage(u) },
                             { key: 'reset',  label: 'Reset password', icon: <KeyIcon />,    onSelect: () => setResetUser(u) },
                             { key: 'sep',    type: 'divider' },
@@ -456,6 +511,103 @@ const AccessSettingsPage: React.FC = () => {
               <input type="checkbox" checked={userForm.is_admin} onChange={(e) => setUserForm({ ...userForm, is_admin: e.target.checked })} />
               Grant administrator role
             </label>
+          </Modal>
+
+          <Modal
+            open={editingUser !== null}
+            title={`Edit user: ${editingUser?.username ?? ''}`}
+            onClose={closeEditUser}
+            onSubmit={() => { if (!savingUser) void submitEditUser() }}
+            footer={<>
+              <Button variant="ghost" onClick={closeEditUser} disabled={savingUser}>Cancel</Button>
+              <Button variant="primary" onClick={submitEditUser} disabled={savingUser}>
+                {savingUser ? 'Saving…' : 'Save changes'}
+              </Button>
+            </>}
+          >
+            {editUserForm && (
+              <>
+                <SP.HelpText>
+                  The username is permanent. Profile, role and account status changes apply immediately.
+                  Leave the password empty to keep the current one.
+                </SP.HelpText>
+                <Input label="Username" value={editingUser?.username ?? ''} disabled />
+                <Input
+                  label="Display name"
+                  autoFocus
+                  value={editUserForm.display_name}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, display_name: e.target.value })}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                  <Input
+                    label="First name"
+                    value={editUserForm.first_name}
+                    onChange={(e) => setEditUserForm({ ...editUserForm, first_name: e.target.value })}
+                  />
+                  <Input
+                    label="Last name"
+                    value={editUserForm.last_name}
+                    onChange={(e) => setEditUserForm({ ...editUserForm, last_name: e.target.value })}
+                  />
+                </div>
+                <Input
+                  label="Email"
+                  type="email"
+                  value={editUserForm.email}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })}
+                />
+                <Input
+                  label="New password (optional)"
+                  type="password"
+                  value={editUserForm.password}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, password: e.target.value })}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: t.color.textMuted }}>Avatar</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <Avatar
+                      id={editingUser?.id ?? -1}
+                      color={editUserForm.avatar_color}
+                      labels={[editUserForm.display_name, editUserForm.first_name, editingUser?.username ?? '']}
+                      size={40}
+                    />
+                    <AvatarColorPicker
+                      value={editUserForm.avatar_color}
+                      onChange={(avatar_color) => setEditUserForm({ ...editUserForm, avatar_color })}
+                    />
+                  </div>
+                </div>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: t.color.textMuted, marginTop: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={editUserForm.is_admin}
+                    onChange={(e) => setEditUserForm({ ...editUserForm, is_admin: e.target.checked })}
+                  />
+                  Grant administrator role
+                </label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: t.color.textMuted }}>
+                  <input
+                    type="checkbox"
+                    checked={editUserForm.is_active}
+                    onChange={(e) => setEditUserForm({ ...editUserForm, is_active: e.target.checked })}
+                  />
+                  Account active
+                </label>
+                {editUserError && (
+                  <div style={{
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    background: `color-mix(in srgb, ${t.color.danger} 10%, transparent)`,
+                    border: `1px solid color-mix(in srgb, ${t.color.danger} 30%, transparent)`,
+                    color: t.color.danger,
+                    fontSize: 13,
+                    fontFamily: t.font.mono,
+                  }}>
+                    {editUserError}
+                  </div>
+                )}
+              </>
+            )}
           </Modal>
 
           <Modal
