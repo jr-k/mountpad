@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN mount_order TEXT NOT NULL DEFAULT '';

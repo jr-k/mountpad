@@ -34,6 +34,10 @@ export interface MountPoint {
    * (handled by `resolveAvatarColor` on the client).
    */
   avatar_color?: string
+  /** Optional glyph displayed instead of the generated initial. */
+  avatar_emoji?: string
+  /** True when the mount has image bytes available from its avatar endpoint. */
+  has_avatar_image?: boolean
   /**
    * Per-mount override of MOUNTPAD_FOLLOW_SYMLINK. The runtime ANDs
    * this with the global env-var, so this column can only TIGHTEN

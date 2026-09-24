@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'styled-components'
 import { usePage } from '@inertiajs/react'
 import { AppShell } from '@/layouts/AppShell'
@@ -49,6 +49,7 @@ interface MountForm {
   default_mode: number
   /** Empty string = use the deterministic palette derived from the id. */
   avatar_color: string
+  avatar_emoji: string
   /** Per-mount override of MOUNTPAD_FOLLOW_SYMLINK. */
   follow_symlinks: boolean
 }
@@ -56,7 +57,7 @@ interface MountForm {
 const emptyForm: MountForm = {
   slug: '', name: '', description: '', host_path: '',
   is_active: true, default_owner_id: null, default_group_id: null,
-  default_mode: 0o750, avatar_color: '',
+  default_mode: 0o750, avatar_color: '', avatar_emoji: '',
   follow_symlinks: true,
 }
 
@@ -70,6 +71,7 @@ const formFromMount = (m: MountPoint): MountForm => ({
   default_group_id: m.default_group_id ?? null,
   default_mode: m.default_mode,
   avatar_color: m.avatar_color ?? '',
+  avatar_emoji: m.avatar_emoji ?? '',
   // Default to true for legacy rows that may not yet have the
   // column populated (or for safety when the API contract changes).
   follow_symlinks: m.follow_symlinks ?? true,
@@ -109,6 +111,10 @@ const MountPointsSettingsPage: React.FC = () => {
   const [form, setForm] = useState<MountForm>(emptyForm)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [removeAvatarImage, setRemoveAvatarImage] = useState(false)
+  const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
+  const avatarInputRef = useRef<HTMLInputElement>(null)
   // Once the user types into the slug field manually, stop deriving it from
   // the display name. Reset to false for "new", true for "edit" (existing
   // slugs are never auto-overwritten as the user retypes the name).
@@ -119,6 +125,16 @@ const MountPointsSettingsPage: React.FC = () => {
   // Folder picker modal for the Host path field. Decoupled state so
   // opening it doesn't fight with the edit modal's input focus.
   const [pickerOpen, setPickerOpen] = useState(false)
+
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreviewURL(null)
+      return
+    }
+    const url = URL.createObjectURL(avatarFile)
+    setAvatarPreviewURL(url)
+    return () => URL.revokeObjectURL(url)
+  }, [avatarFile])
 
   const load = async () => setMounts((await api.get<MountPoint[] | null>('/api/mount-points')) ?? [])
   useEffect(() => {
@@ -148,12 +164,16 @@ const MountPointsSettingsPage: React.FC = () => {
   const openNew = () => {
     setForm(emptyForm)
     setErr(null)
+    setAvatarFile(null)
+    setRemoveAvatarImage(false)
     setSlugTouched(false)
     setEditing('new')
   }
   const openEdit = (m: MountPoint) => {
     setForm(formFromMount(m))
     setErr(null)
+    setAvatarFile(null)
+    setRemoveAvatarImage(false)
     // An existing record already has a slug; don't overwrite it as the
     // user edits the display name. Treat the slug field as user-managed.
     setSlugTouched(true)
@@ -163,6 +183,8 @@ const MountPointsSettingsPage: React.FC = () => {
     setEditing(null)
     setErr(null)
     setBusy(false)
+    setAvatarFile(null)
+    setRemoveAvatarImage(false)
   }
 
   const onNameChange = (name: string) => {
@@ -180,19 +202,44 @@ const MountPointsSettingsPage: React.FC = () => {
     setForm((prev) => ({ ...prev, slug }))
   }
 
+  const upsertMount = (mount: MountPoint) => {
+    setMounts((current) => [
+      ...current.filter((item) => item.id !== mount.id),
+      mount,
+    ].sort((a, b) => a.slug.localeCompare(b.slug)))
+  }
+
   const submit = async () => {
     if (!editing) return
     setBusy(true); setErr(null)
+    let saved: MountPoint | null = null
+    const wasNew = editing === 'new'
     try {
-      if (editing === 'new') {
-        const created = await api.post<MountPoint>('/api/mount-points', form)
-        setMounts((current) => [...current, created].sort((a, b) => a.slug.localeCompare(b.slug)))
-      } else {
-        const updated = await api.patch<MountPoint>(`/api/mount-points/${editing.id}`, form)
-        setMounts((current) => current
-          .map((mount) => mount.id === updated.id ? updated : mount)
-          .sort((a, b) => a.slug.localeCompare(b.slug)))
+      saved = wasNew
+        ? await api.post<MountPoint>('/api/mount-points', form)
+        : await api.patch<MountPoint>(`/api/mount-points/${editing.id}`, form)
+      upsertMount(saved)
+      // If image upload fails after creation, retries must PATCH the mount
+      // that now exists instead of trying to create the same slug again.
+      if (wasNew) setEditing(saved)
+
+      if (avatarFile) {
+        const body = new FormData()
+        body.append('avatar', avatarFile)
+        const response = await fetch(`/api/mount-points/${saved.id}/avatar`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          body,
+        })
+        if (!response.ok) {
+          throw new HttpError(response.status, `HTTP ${response.status}`, await response.text())
+        }
+        saved = await response.json() as MountPoint
+      } else if (removeAvatarImage && !wasNew) {
+        await api.del(`/api/mount-points/${saved.id}/avatar`)
+        saved = { ...saved, has_avatar_image: false }
       }
+      upsertMount(saved)
       closeForm()
     } catch (e: unknown) {
       setErr(e instanceof HttpError && e.body ? e.body : 'Save failed.')
@@ -210,6 +257,7 @@ const MountPointsSettingsPage: React.FC = () => {
     const active = mounts.filter((m) => m.is_active).length
     return { total: mounts.length, active, disabled: mounts.length - active }
   }, [mounts])
+  const editingMount = editing && editing !== 'new' ? editing : null
 
   return (
     <AppShell
@@ -282,6 +330,8 @@ const MountPointsSettingsPage: React.FC = () => {
                             <Avatar
                               id={m.id}
                               color={m.avatar_color}
+                              emoji={m.avatar_emoji}
+                              imageUrl={m.has_avatar_image ? `/api/mount-points/${m.id}/avatar` : undefined}
                               labels={[m.name, m.slug]}
                               size={28}
                             />
@@ -452,8 +502,14 @@ const MountPointsSettingsPage: React.FC = () => {
                     we pass -1 (= neutral graphite slot) until the row
                     actually exists. */}
                 <Avatar
-                  id={typeof editing === 'object' ? editing?.id ?? -1 : -1}
+                  id={editingMount?.id ?? -1}
                   color={form.avatar_color}
+                  emoji={form.avatar_emoji}
+                  imageUrl={avatarPreviewURL || (
+                    editingMount?.has_avatar_image && !removeAvatarImage
+                      ? `/api/mount-points/${editingMount.id}/avatar`
+                      : undefined
+                  )}
                   labels={[form.name, form.slug]}
                   size={40}
                 />
@@ -462,6 +518,41 @@ const MountPointsSettingsPage: React.FC = () => {
                     value={form.avatar_color}
                     onChange={(c) => setForm({ ...form, avatar_color: c })}
                   />
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                    <Input
+                      aria-label="Avatar emoji"
+                      placeholder="Emoji (ex. 📁)"
+                      value={form.avatar_emoji}
+                      maxLength={16}
+                      onChange={(e) => setForm({ ...form, avatar_emoji: e.target.value.trim() })}
+                      style={{ width: 150 }}
+                    />
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/gif,image/webp"
+                      hidden
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null
+                        setAvatarFile(file)
+                        if (file) setRemoveAvatarImage(false)
+                        e.target.value = ''
+                      }}
+                    />
+                    <Button variant="ghost" onClick={() => avatarInputRef.current?.click()}>Upload image</Button>
+                    {(avatarFile || (editingMount?.has_avatar_image && !removeAvatarImage)) && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          setAvatarFile(null)
+                          setRemoveAvatarImage(true)
+                        }}
+                      >
+                        Remove image
+                      </Button>
+                    )}
+                  </div>
+                  <SP.HelpText>Image (max. 2 MB) takes priority over emoji, then initial.</SP.HelpText>
                 </div>
               </div>
             </div>

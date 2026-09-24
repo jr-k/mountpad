@@ -13,18 +13,16 @@ type MountPointsRepo struct{ DB *db.DB }
 
 func NewMountPointsRepo(d *db.DB) *MountPointsRepo { return &MountPointsRepo{DB: d} }
 
-// Keep this column list synchronised with `scanMP`. avatar_color was
-// added in migration 0003 (default ” server-side) and
-// follow_symlinks in migration 0004 (default TRUE server-side), so
-// old rows scan cleanly with their defaults.
-const mpCols = "id, slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, follow_symlinks, created_at, updated_at"
+// Keep this column list synchronised with `scanMP`.
+const mpCols = "id, slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, avatar_emoji, (avatar_image IS NOT NULL), follow_symlinks, created_at, updated_at"
 
 func scanMP(row interface{ Scan(...any) error }) (*models.MountPoint, error) {
 	var m models.MountPoint
 	var ownerID, groupID sql.NullInt64
 	var mode int64
 	if err := row.Scan(&m.ID, &m.Slug, &m.Name, &m.Description, &m.HostPath, &m.IsActive,
-		&ownerID, &groupID, &mode, &m.AvatarColor, &m.FollowSymlinks, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&ownerID, &groupID, &mode, &m.AvatarColor, &m.AvatarEmoji, &m.HasAvatarImage,
+		&m.FollowSymlinks, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if ownerID.Valid {
@@ -93,15 +91,15 @@ func (r *MountPointsRepo) GetBySlug(ctx context.Context, slug string) (*models.M
 
 func (r *MountPointsRepo) Create(ctx context.Context, m *models.MountPoint) error {
 	q := r.DB.Placeholder(`INSERT INTO mount_points
-		(slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, follow_symlinks)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(slug, name, description, host_path, is_active, default_owner_id, default_group_id, default_mode, avatar_color, avatar_emoji, follow_symlinks)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if r.DB.Driver == "postgres" {
 		q += " RETURNING id"
 		return r.DB.QueryRowContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-			m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks).Scan(&m.ID)
+			m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.AvatarEmoji, m.FollowSymlinks).Scan(&m.ID)
 	}
 	res, err := r.DB.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks)
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.AvatarEmoji, m.FollowSymlinks)
 	if err != nil {
 		return err
 	}
@@ -114,10 +112,10 @@ func (r *MountPointsRepo) Update(ctx context.Context, m *models.MountPoint) erro
 	q := r.DB.Placeholder(`UPDATE mount_points SET
 		slug = ?, name = ?, description = ?, host_path = ?, is_active = ?,
 		default_owner_id = ?, default_group_id = ?, default_mode = ?,
-		avatar_color = ?, follow_symlinks = ?,
+		avatar_color = ?, avatar_emoji = ?, follow_symlinks = ?,
 		updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
 	_, err := r.DB.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks, m.ID)
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.AvatarEmoji, m.FollowSymlinks, m.ID)
 	return err
 }
 
@@ -146,16 +144,61 @@ func (r *MountPointsRepo) UpdateAtomic(ctx context.Context, id int64, mutate fun
 	q = r.DB.Placeholder(`UPDATE mount_points SET
 		slug = ?, name = ?, description = ?, host_path = ?, is_active = ?,
 		default_owner_id = ?, default_group_id = ?, default_mode = ?,
-		avatar_color = ?, follow_symlinks = ?,
+		avatar_color = ?, avatar_emoji = ?, follow_symlinks = ?,
 		updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
 	if _, err := tx.ExecContext(ctx, q, m.Slug, m.Name, m.Description, m.HostPath, m.IsActive,
-		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.FollowSymlinks, m.ID); err != nil {
+		m.DefaultOwnerID, m.DefaultGroupID, int64(m.DefaultMode), m.AvatarColor, m.AvatarEmoji, m.FollowSymlinks, m.ID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+func (r *MountPointsRepo) SetAvatarImage(ctx context.Context, id int64, data []byte, contentType string) error {
+	q := r.DB.Placeholder(`UPDATE mount_points
+		SET avatar_image = ?, avatar_image_type = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`)
+	res, err := r.DB.ExecContext(ctx, q, data, contentType, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err == nil && affected == 0 {
+		return db.ErrNotFound
+	}
+	return err
+}
+
+func (r *MountPointsRepo) AvatarImage(ctx context.Context, id int64) ([]byte, string, error) {
+	q := r.DB.Placeholder("SELECT avatar_image, avatar_image_type FROM mount_points WHERE id = ?")
+	var data []byte
+	var contentType string
+	if err := r.DB.QueryRowContext(ctx, q, id).Scan(&data, &contentType); errors.Is(err, sql.ErrNoRows) {
+		return nil, "", db.ErrNotFound
+	} else if err != nil {
+		return nil, "", err
+	}
+	if len(data) == 0 {
+		return nil, "", db.ErrNotFound
+	}
+	return data, contentType, nil
+}
+
+func (r *MountPointsRepo) ClearAvatarImage(ctx context.Context, id int64) error {
+	q := r.DB.Placeholder(`UPDATE mount_points
+		SET avatar_image = NULL, avatar_image_type = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`)
+	res, err := r.DB.ExecContext(ctx, q, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err == nil && affected == 0 {
+		return db.ErrNotFound
+	}
+	return err
 }
 
 func (r *MountPointsRepo) Delete(ctx context.Context, id int64) error {

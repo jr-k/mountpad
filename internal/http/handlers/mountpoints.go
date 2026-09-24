@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,6 +28,7 @@ func writeMountError(w http.ResponseWriter, err error) {
 		errors.Is(err, mountpoints.ErrNameRequired),
 		errors.Is(err, mountpoints.ErrHostPath),
 		errors.Is(err, mountpoints.ErrModeInvalid),
+		errors.Is(err, mountpoints.ErrAvatarEmoji),
 		errors.Is(err, mountpoints.ErrPrincipal):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, mountpoints.ErrSlugExists):
@@ -62,6 +65,7 @@ type mountPayload struct {
 	// is a valid value and the only way for the user to clear a
 	// previously picked colour.
 	AvatarColor string `json:"avatar_color"`
+	AvatarEmoji string `json:"avatar_emoji"`
 	// Omitted booleans use the database-facing defaults on creation.
 	FollowSymlinks *bool `json:"follow_symlinks,omitempty"`
 }
@@ -97,6 +101,7 @@ type updateMountPayload struct {
 	DefaultGroupID nullableID `json:"default_group_id"`
 	DefaultMode    *uint16    `json:"default_mode,omitempty"`
 	AvatarColor    *string    `json:"avatar_color,omitempty"`
+	AvatarEmoji    *string    `json:"avatar_emoji,omitempty"`
 	FollowSymlinks *bool      `json:"follow_symlinks,omitempty"`
 }
 
@@ -124,6 +129,7 @@ func (h *MountPointsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		DefaultOwnerID: p.DefaultOwnerID, DefaultGroupID: p.DefaultGroupID,
 		DefaultMode:    defaultMode,
 		AvatarColor:    p.AvatarColor,
+		AvatarEmoji:    strings.TrimSpace(p.AvatarEmoji),
 		FollowSymlinks: followSymlinks,
 	}
 	if err := h.Svc.Create(r.Context(), m); err != nil {
@@ -149,13 +155,100 @@ func (h *MountPointsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		IsActive:        p.IsActive,
 		DefaultOwnerSet: p.DefaultOwnerID.Set, DefaultOwnerID: p.DefaultOwnerID.Value,
 		DefaultGroupSet: p.DefaultGroupID.Set, DefaultGroupID: p.DefaultGroupID.Value,
-		DefaultMode: p.DefaultMode, AvatarColor: p.AvatarColor, FollowSymlinks: p.FollowSymlinks,
+		DefaultMode: p.DefaultMode, AvatarColor: p.AvatarColor, AvatarEmoji: p.AvatarEmoji,
+		FollowSymlinks: p.FollowSymlinks,
 	})
 	if err != nil {
 		writeMountError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+const maxMountAvatarBytes = 2 << 20
+
+var allowedMountAvatarTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+func mountID(r *http.Request) (int64, error) {
+	return strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+}
+
+func (h *MountPointsHandler) GetAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := mountID(r)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	data, contentType, err := h.Svc.Repo.AvatarImage(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.NotFound(w, r)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(data)
+}
+
+func (h *MountPointsHandler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := mountID(r)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMountAvatarBytes+(1<<20))
+	file, _, err := r.FormFile("avatar")
+	if err != nil {
+		http.Error(w, "avatar image is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxMountAvatarBytes+1))
+	if err != nil {
+		http.Error(w, "unable to read avatar image", http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 || len(data) > maxMountAvatarBytes {
+		http.Error(w, "avatar image must be at most 2 MB", http.StatusBadRequest)
+		return
+	}
+	contentType := http.DetectContentType(data)
+	if !allowedMountAvatarTypes[contentType] {
+		http.Error(w, "avatar must be a JPEG, PNG, GIF, or WebP image", http.StatusBadRequest)
+		return
+	}
+	if err := h.Svc.Repo.SetAvatarImage(r.Context(), id, data, contentType); err != nil {
+		writeMountError(w, err)
+		return
+	}
+	m, err := h.Svc.Repo.GetByID(r.Context(), id)
+	if err != nil {
+		writeMountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (h *MountPointsHandler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := mountID(r)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if err := h.Svc.Repo.ClearAvatarImage(r.Context(), id); err != nil {
+		writeMountError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *MountPointsHandler) Delete(w http.ResponseWriter, r *http.Request) {

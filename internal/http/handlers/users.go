@@ -199,6 +199,53 @@ func (h *UsersHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, u)
 }
 
+type mountOrderPayload struct {
+	MountIDs []int64 `json:"mount_ids"`
+}
+
+func (h *UsersHandler) UpdateMyMountOrder(w http.ResponseWriter, r *http.Request) {
+	caller := auth.UserFrom(r.Context())
+	if caller == nil || auth.IsSynthetic(caller) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var p mountOrderPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(p.MountIDs) > 10000 {
+		http.Error(w, "too many mount ids", http.StatusBadRequest)
+		return
+	}
+	seen := make(map[int64]struct{}, len(p.MountIDs))
+	for _, id := range p.MountIDs {
+		if id <= 0 {
+			http.Error(w, "invalid mount id", http.StatusBadRequest)
+			return
+		}
+		if _, duplicate := seen[id]; duplicate {
+			http.Error(w, "duplicate mount id", http.StatusBadRequest)
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	raw, err := json.Marshal(p.MountIDs)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.Repo.SetMountOrder(r.Context(), caller.ID, string(raw)); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

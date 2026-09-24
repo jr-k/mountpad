@@ -22,6 +22,7 @@ export const AvatarCircle = styled.span<{ $bg: string; $size: number }>`
   width:  ${({ $size }) => $size}px;
   height: ${({ $size }) => $size}px;
   border-radius: 50%;
+  overflow: hidden;
   font-family: ${({ theme }) => theme.font.mono};
   font-weight: 600;
   /* Initial sizing scales with the circle: ~46% of the diameter looks right
@@ -39,6 +40,20 @@ export const AvatarCircle = styled.span<{ $bg: string; $size: number }>`
 `
 
 AvatarCircle.displayName = 'Avatar.Circle'
+
+export const AvatarGlyph = styled.span<{ $emoji: boolean }>`
+  line-height: 1;
+  font-family: ${({ $emoji, theme }) => ($emoji ? 'inherit' : theme.font.mono)};
+  font-size: ${({ $emoji }) => ($emoji ? '1.12em' : 'inherit')};
+  text-transform: ${({ $emoji }) => ($emoji ? 'none' : 'uppercase')};
+`
+
+export const AvatarImage = styled.img`
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+`
 
 // ── AvatarColorPicker styled parts ─────────────────────────────────────
 // The swatch grid sits inside any "edit avatar color" form. Kept here

@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { useTheme } from 'styled-components'
+import { usePage } from '@inertiajs/react'
 import type { MountPoint } from '@/types/files'
 import { Tooltip, TooltipParts as T } from '@/components/Tooltip'
 import { Modal } from '@/components/Modal'
+import { Button } from '@/components/Button'
 import { initialFor, resolveAvatarColor } from '@/components/Avatar'
+import { api, HttpError } from '@/lib/api'
+import type { SharedProps } from '@/types/inertia'
 
 import * as S from './styled'
 
@@ -22,6 +26,12 @@ const LS_KEY = 'mountpad:mount-sidebar:collapsed'
 // requiring an admin to revisit each one.
 const mountInitial = (mp: MountPoint): string => initialFor(mp.name, mp.slug)
 const mountColor   = (mp: MountPoint): string => resolveAvatarColor(mp.avatar_color, mp.id)
+const mountAvatarContent = (mp: MountPoint): React.ReactNode => {
+  if (mp.has_avatar_image) {
+    return <S.AvatarImage src={`/api/mount-points/${mp.id}/avatar`} alt="" />
+  }
+  return <S.AvatarGlyph $emoji={!!mp.avatar_emoji}>{mp.avatar_emoji || mountInitial(mp)}</S.AvatarGlyph>
+}
 
 const buildTooltip = (mp: MountPoint) => (
   <>
@@ -59,6 +69,13 @@ const CaretDownIcon: React.FC = () => (
   </svg>
 )
 
+const ReorderIcon: React.FC = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+    <path d="M8 6h12M8 12h12M8 18h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M4 5v14m0 0-2-2m2 2 2-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
 // Synchronously evaluate a CSS media query so the first render already
 // matches the viewport (no flash of desktop layout on a phone). The
 // listener keeps the value in sync if the user rotates the device or
@@ -82,6 +99,49 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
   mountPoints, activeMountId, onSelect,
 }) => {
   const theme = useTheme() as { bp: { lg: string } }
+  const { props } = usePage<SharedProps & Record<string, unknown>>()
+  const [orderedMountPoints, setOrderedMountPoints] = useState(mountPoints)
+  const [orderOpen, setOrderOpen] = useState(false)
+  const [orderDraft, setOrderDraft] = useState<MountPoint[]>([])
+  const [orderBusy, setOrderBusy] = useState(false)
+  const [orderError, setOrderError] = useState<string | null>(null)
+  const canReorder = !!props.auth.user && !props.auth.user.synthetic && orderedMountPoints.length > 1
+
+  useEffect(() => {
+    setOrderedMountPoints(mountPoints)
+  }, [mountPoints])
+
+  const openOrder = () => {
+    setOrderDraft(orderedMountPoints)
+    setOrderError(null)
+    setOrderOpen(true)
+  }
+
+  const moveMount = (index: number, direction: -1 | 1) => {
+    const target = index + direction
+    if (target < 0 || target >= orderDraft.length) return
+    setOrderDraft((current) => {
+      const next = [...current]
+      const moved = next[index]
+      next[index] = next[target]
+      next[target] = moved
+      return next
+    })
+  }
+
+  const saveOrder = async () => {
+    setOrderBusy(true)
+    setOrderError(null)
+    try {
+      await api.put('/api/me/mount-order', { mount_ids: orderDraft.map((mount) => mount.id) })
+      setOrderedMountPoints(orderDraft)
+      setOrderOpen(false)
+    } catch (error: unknown) {
+      setOrderError(error instanceof HttpError && error.body ? error.body : 'Unable to save mount order.')
+    } finally {
+      setOrderBusy(false)
+    }
+  }
   // The drawer takes over below `lg`. We swap the desktop rail for a
   // dropdown there: a stacked list of full-width cards reads as
   // repetitive on a phone, and the collapse arrow does nothing in the
@@ -105,16 +165,35 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
 
   if (isMobile) {
     return (
-      <MobileMountDropdown
-        mountPoints={mountPoints}
-        activeMountId={activeMountId}
-        onSelect={onSelect}
-      />
+      <>
+        <S.MobileSidebarWrap>
+          <MobileMountDropdown
+            mountPoints={orderedMountPoints}
+            activeMountId={activeMountId}
+            onSelect={onSelect}
+          />
+          {canReorder && (
+            <S.OrderButton type="button" onClick={openOrder} title="Change mount order" aria-label="Change mount order">
+              <ReorderIcon />
+            </S.OrderButton>
+          )}
+        </S.MobileSidebarWrap>
+        <MountOrderModal
+          open={orderOpen}
+          mounts={orderDraft}
+          busy={orderBusy}
+          error={orderError}
+          onMove={moveMount}
+          onSave={saveOrder}
+          onClose={() => setOrderOpen(false)}
+        />
+      </>
     )
   }
 
   return (
-    <S.MountPointSidebarRoot $collapsed={collapsed}>
+    <>
+      <S.MountPointSidebarRoot $collapsed={collapsed}>
       <S.Header $collapsed={collapsed}>
         {!collapsed && <S.Heading>Mounts</S.Heading>}
         <Tooltip
@@ -132,15 +211,14 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
         </Tooltip>
       </S.Header>
 
-      {mountPoints.map((mp) => {
+      {orderedMountPoints.map((mp) => {
         const active = mp.id === activeMountId
-        const letter = mountInitial(mp)
         const bg = mountColor(mp)
         if (collapsed) {
           return (
             <Tooltip key={mp.id} placement="right" content={buildTooltip(mp)}>
               <S.RailItem $active={active} onClick={() => onSelect(mp)}>
-                <S.Avatar $bg={bg}>{letter}</S.Avatar>
+                <S.Avatar $bg={bg}>{mountAvatarContent(mp)}</S.Avatar>
               </S.RailItem>
             </Tooltip>
           )
@@ -148,7 +226,7 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
         return (
           <Tooltip key={mp.id} placement="right" content={buildTooltip(mp)}>
             <S.Item $active={active} onClick={() => onSelect(mp)}>
-              <S.Avatar $bg={bg}>{letter}</S.Avatar>
+              <S.Avatar $bg={bg}>{mountAvatarContent(mp)}</S.Avatar>
               <S.Meta>
                 <S.Name>{mp.name}</S.Name>
                 <S.Path>{mp.host_path}</S.Path>
@@ -157,9 +235,82 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
           </Tooltip>
         )
       })}
-    </S.MountPointSidebarRoot>
+        {canReorder && (
+          <S.OrderFooter>
+            <Tooltip placement="right" content={<T.Muted>Change mount order</T.Muted>}>
+              <S.OrderButton type="button" onClick={openOrder} aria-label="Change mount order">
+                <ReorderIcon />
+              </S.OrderButton>
+            </Tooltip>
+          </S.OrderFooter>
+        )}
+      </S.MountPointSidebarRoot>
+      <MountOrderModal
+        open={orderOpen}
+        mounts={orderDraft}
+        busy={orderBusy}
+        error={orderError}
+        onMove={moveMount}
+        onSave={saveOrder}
+        onClose={() => setOrderOpen(false)}
+      />
+    </>
   )
 }
+
+interface MountOrderModalProps {
+  open: boolean
+  mounts: MountPoint[]
+  busy: boolean
+  error: string | null
+  onMove: (index: number, direction: -1 | 1) => void
+  onSave: () => void
+  onClose: () => void
+}
+
+const MountOrderModal: React.FC<MountOrderModalProps> = ({
+  open, mounts, busy, error, onMove, onSave, onClose,
+}) => (
+  <Modal
+    open={open}
+    title="Mount order"
+    onClose={() => { if (!busy) onClose() }}
+    footer={<>
+      <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+      <Button variant="primary" onClick={onSave} disabled={busy}>
+        {busy ? 'Saving…' : 'Save order'}
+      </Button>
+    </>}
+  >
+    <S.OrderList>
+      {mounts.map((mount, index) => (
+        <S.OrderRow key={mount.id}>
+          <S.Avatar $bg={mountColor(mount)}>{mountAvatarContent(mount)}</S.Avatar>
+          <S.Name>{mount.name}</S.Name>
+          <S.OrderActions>
+            <S.OrderMoveButton
+              type="button"
+              disabled={busy || index === 0}
+              onClick={() => onMove(index, -1)}
+              aria-label={`Move ${mount.name} up`}
+            >
+              ↑
+            </S.OrderMoveButton>
+            <S.OrderMoveButton
+              type="button"
+              disabled={busy || index === mounts.length - 1}
+              onClick={() => onMove(index, 1)}
+              aria-label={`Move ${mount.name} down`}
+            >
+              ↓
+            </S.OrderMoveButton>
+          </S.OrderActions>
+        </S.OrderRow>
+      ))}
+    </S.OrderList>
+    {error && <S.OrderError>{error}</S.OrderError>}
+  </Modal>
+)
 
 // MobileMountDropdown is the mount picker shown inside the mobile
 // drawer. It renders a trigger row (the active mount, with the same
@@ -202,7 +353,7 @@ const MobileMountDropdown: React.FC<MountPointSidebarProps> = ({
       >
         {active ? (
           <>
-            <S.Avatar $bg={mountColor(active)}>{mountInitial(active)}</S.Avatar>
+            <S.Avatar $bg={mountColor(active)}>{mountAvatarContent(active)}</S.Avatar>
             <S.Meta>
               <S.Name>{active.name}</S.Name>
               <S.Path>{active.host_path}</S.Path>
@@ -234,7 +385,7 @@ const MobileMountDropdown: React.FC<MountPointSidebarProps> = ({
                 $active={isActive}
                 onClick={() => { onSelect(mp); setOpen(false) }}
               >
-                <S.Avatar $bg={mountColor(mp)}>{mountInitial(mp)}</S.Avatar>
+                <S.Avatar $bg={mountColor(mp)}>{mountAvatarContent(mp)}</S.Avatar>
                 <S.Meta>
                   <S.Name>{mp.name}</S.Name>
                   <S.Path>{mp.host_path}</S.Path>

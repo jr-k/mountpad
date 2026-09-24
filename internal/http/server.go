@@ -86,12 +86,16 @@ func NewRouter(d *Deps) http.Handler {
 			// email, avatar color, password). The handler strips admin-only
 			// fields before persisting, so it's safe to expose to members.
 			r.Patch("/me", usersH.UpdateMe)
+			r.Put("/me/mount-order", usersH.UpdateMyMountOrder)
 
 			// Directory endpoints: lightweight {id, name} listings, safe to
 			// expose to non-admins so the file tree can resolve owner/group
 			// IDs into human-readable labels for the details panel.
 			r.Get("/directory/users", usersH.Directory)
 			r.Get("/directory/groups", groupsH.Directory)
+			// Avatar bytes are available to every signed-in user because
+			// mount metadata itself is shared with the workspace sidebar.
+			r.Get("/mount-points/{id}/avatar", mountsH.GetAvatar)
 
 			r.Route("/fs/{mountId}", func(r chi.Router) {
 				r.Get("/list", fsH.List)
@@ -133,6 +137,8 @@ func NewRouter(d *Deps) http.Handler {
 				r.Post("/mount-points", mountsH.Create)
 				r.Patch("/mount-points/{id}", mountsH.Update)
 				r.Delete("/mount-points/{id}", mountsH.Delete)
+				r.Post("/mount-points/{id}/avatar", mountsH.UploadAvatar)
+				r.Delete("/mount-points/{id}/avatar", mountsH.DeleteAvatar)
 
 				// Read-only directory browser over the host filesystem
 				// visible to the container. Backs the folder-picker

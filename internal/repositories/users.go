@@ -18,13 +18,13 @@ var ErrLastActiveAdmin = errors.New("last active administrator")
 // Keep this column list synchronised with `scanUser`. Profile fields
 // (first_name/last_name/email/avatar_color) were added in migration 0002
 // and default to empty strings server-side so old rows scan cleanly.
-const userCols = "id, username, display_name, first_name, last_name, email, avatar_color, password_hash, is_admin, is_active, created_at, updated_at"
+const userCols = "id, username, display_name, first_name, last_name, email, avatar_color, mount_order, password_hash, is_admin, is_active, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*models.User, error) {
 	var u models.User
 	if err := row.Scan(
 		&u.ID, &u.Username, &u.DisplayName,
-		&u.FirstName, &u.LastName, &u.Email, &u.AvatarColor,
+		&u.FirstName, &u.LastName, &u.Email, &u.AvatarColor, &u.MountOrder,
 		&u.PasswordHash, &u.IsAdmin, &u.IsActive,
 		&u.CreatedAt, &u.UpdatedAt,
 	); err != nil {
@@ -115,6 +115,19 @@ func (r *UsersRepo) Update(ctx context.Context, u *models.User) error {
 func (r *UsersRepo) UpdatePassword(ctx context.Context, id int64, hash string) error {
 	q := r.DB.Placeholder("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
 	_, err := r.DB.ExecContext(ctx, q, hash, id)
+	return err
+}
+
+func (r *UsersRepo) SetMountOrder(ctx context.Context, id int64, order string) error {
+	q := r.DB.Placeholder("UPDATE users SET mount_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+	result, err := r.DB.ExecContext(ctx, q, order, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return db.ErrNotFound
+	}
 	return err
 }
 

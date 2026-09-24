@@ -140,10 +140,39 @@ func SharedProps(r *http.Request, gate *auth.Gate, mounts *repositories.MountPoi
 	props["auth"] = authBlock
 	if mounts != nil {
 		if list, err := mounts.ListActive(r.Context()); err == nil {
-			props["mount_points"] = visibleMounts(list, user, resolver)
+			props["mount_points"] = orderedMounts(visibleMounts(list, user, resolver), user)
 		}
 	}
 	return props
+}
+
+func orderedMounts(list []*models.MountPoint, user *models.User) []*models.MountPoint {
+	if user == nil || user.MountOrder == "" {
+		return list
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(user.MountOrder), &ids); err != nil || len(ids) == 0 {
+		return list
+	}
+	byID := make(map[int64]*models.MountPoint, len(list))
+	for _, mount := range list {
+		byID[mount.ID] = mount
+	}
+	ordered := make([]*models.MountPoint, 0, len(list))
+	for _, id := range ids {
+		if mount, ok := byID[id]; ok {
+			ordered = append(ordered, mount)
+			delete(byID, id)
+		}
+	}
+	// Newly created or newly accessible mounts keep the repository's
+	// deterministic slug order after the user's explicitly ordered entries.
+	for _, mount := range list {
+		if _, ok := byID[mount.ID]; ok {
+			ordered = append(ordered, mount)
+		}
+	}
+	return ordered
 }
 
 // visibleMounts returns the subset of `list` the given user is allowed to

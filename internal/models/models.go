@@ -3,17 +3,18 @@ package models
 import "time"
 
 type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	DisplayName  string    `json:"display_name"`
-	FirstName    string    `json:"first_name"`
-	LastName     string    `json:"last_name"`
-	Email        string    `json:"email"`
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name"`
+	Email       string `json:"email"`
 	// AvatarColor is a CSS color string ("#rrggbb" or empty). When empty,
 	// the frontend renders a deterministic palette entry derived from the
 	// user ID, so every account has *some* recognisable colour out of the
 	// box without forcing a profile edit.
 	AvatarColor  string    `json:"avatar_color"`
+	MountOrder   string    `json:"-"`
 	PasswordHash string    `json:"-"`
 	IsAdmin      bool      `json:"is_admin"`
 	IsActive     bool      `json:"is_active"`
@@ -23,9 +24,9 @@ type User struct {
 }
 
 type Group struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 	// AvatarColor mirrors the user field: optional override; empty means
 	// "use the deterministic palette entry for this id".
 	AvatarColor string    `json:"avatar_color"`
@@ -34,19 +35,24 @@ type Group struct {
 }
 
 type MountPoint struct {
-	ID             int64     `json:"id"`
-	Slug           string    `json:"slug"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	HostPath       string    `json:"host_path"`
-	IsActive       bool      `json:"is_active"`
-	DefaultOwnerID *int64    `json:"default_owner_id,omitempty"`
-	DefaultGroupID *int64    `json:"default_group_id,omitempty"`
-	DefaultMode    uint16    `json:"default_mode"`
+	ID             int64  `json:"id"`
+	Slug           string `json:"slug"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	HostPath       string `json:"host_path"`
+	IsActive       bool   `json:"is_active"`
+	DefaultOwnerID *int64 `json:"default_owner_id,omitempty"`
+	DefaultGroupID *int64 `json:"default_group_id,omitempty"`
+	DefaultMode    uint16 `json:"default_mode"`
 	// AvatarColor mirrors the user and group fields: optional CSS color
 	// override; empty means "use the deterministic palette entry for
 	// this id". Added in migration 0003 so old rows scan as "".
-	AvatarColor string    `json:"avatar_color"`
+	AvatarColor string `json:"avatar_color"`
+	// AvatarEmoji replaces the generated initial when no custom image is set.
+	AvatarEmoji string `json:"avatar_emoji"`
+	// HasAvatarImage exposes the presence of the separately stored image
+	// without serialising its bytes into every mount-point response.
+	HasAvatarImage bool `json:"has_avatar_image"`
 	// FollowSymlinks is the per-mount override of the global
 	// MOUNTPAD_FOLLOW_SYMLINK env var. It can only TIGHTEN the
 	// global setting: when global is off, this field is ignored

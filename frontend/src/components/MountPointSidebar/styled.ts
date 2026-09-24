@@ -17,6 +17,8 @@ const EXPANDED_WIDTH = '220px'
 
 export const MountPointSidebarRoot = styled.div<{ $collapsed: boolean }>`
   width: ${({ $collapsed }) => ($collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH)};
+  height: 100%;
+  min-height: 0;
   padding: ${({ theme }) => theme.space[2]};
   display: flex;
   flex-direction: column;
@@ -65,6 +67,40 @@ export const ToggleButton = styled.button`
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 
+  &:hover {
+    color: ${({ theme }) => theme.color.text};
+    background: ${({ theme }) => theme.color.bgElev};
+    border-color: ${({ theme }) => theme.color.border};
+  }
+`
+
+export const MobileSidebarWrap = styled.div`
+  display: flex;
+  align-items: center;
+  width: 100%;
+`
+
+export const OrderFooter = styled.div`
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding-top: ${({ theme }) => theme.space[2]};
+`
+
+export const OrderButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: transparent;
+  color: ${({ theme }) => theme.color.textMuted};
+  cursor: pointer;
   &:hover {
     color: ${({ theme }) => theme.color.text};
     background: ${({ theme }) => theme.color.bgElev};
@@ -152,6 +188,7 @@ export const Avatar = styled.span<{ $bg: string }>`
   height: 32px;
   flex-shrink: 0;
   border-radius: 8px;
+  overflow: hidden;
   font-family: ${({ theme }) => theme.font.mono};
   font-weight: 600;
   font-size: 13px;
@@ -165,6 +202,62 @@ export const Avatar = styled.span<{ $bg: string }>`
      coloured surfaces (e.g. white avatar on white drawer). */
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
   transition: box-shadow 120ms ease;
+`
+
+export const AvatarGlyph = styled.span<{ $emoji: boolean }>`
+  line-height: 1;
+  font-family: ${({ $emoji, theme }) => ($emoji ? 'inherit' : theme.font.mono)};
+  font-size: ${({ $emoji }) => ($emoji ? '18px' : '13px')};
+  text-transform: ${({ $emoji }) => ($emoji ? 'none' : 'uppercase')};
+`
+
+export const AvatarImage = styled.img`
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+`
+
+export const OrderList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: ${({ theme }) => theme.space[1]};
+`
+
+export const OrderRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => theme.space[2]};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ theme }) => theme.color.bgSubtle};
+`
+
+export const OrderActions = styled.div`
+  display: flex;
+  gap: ${({ theme }) => theme.space[1]};
+  margin-left: auto;
+`
+
+export const OrderMoveButton = styled.button`
+  width: 30px;
+  height: 30px;
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ theme }) => theme.color.bgElev};
+  color: ${({ theme }) => theme.color.text};
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+`
+
+export const OrderError = styled.p`
+  margin: ${({ theme }) => `${theme.space[2]} 0 0`};
+  color: ${({ theme }) => theme.color.danger};
+  font-size: ${({ theme }) => theme.font.size.sm};
 `
 
 export const Meta = styled.div`

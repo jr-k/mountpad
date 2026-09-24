@@ -14,6 +14,10 @@ interface AvatarProps {
    * string is treated as "no override" and falls back to the palette.
    */
   color?: string | null
+  /** Optional glyph shown instead of the generated initial. */
+  emoji?: string | null
+  /** Optional image URL. Images take precedence over emoji and initial. */
+  imageUrl?: string | null
   /**
    * Labels considered (in order) when picking the displayed initial. The
    * first non-empty label wins. Typical usage is `[display_name, username]`
@@ -27,7 +31,9 @@ interface AvatarProps {
   title?: string
 }
 
-export const Avatar: React.FC<AvatarProps> = ({ id, color, labels, size = 32, className, title }) => {
+export const Avatar: React.FC<AvatarProps> = ({
+  id, color, emoji, imageUrl, labels, size = 32, className, title,
+}) => {
   const bg = resolveAvatarColor(color, id ?? null)
   const initial = initialFor(...labels)
   return (
@@ -38,7 +44,9 @@ export const Avatar: React.FC<AvatarProps> = ({ id, color, labels, size = 32, cl
       title={title}
       aria-hidden={title ? undefined : true}
     >
-      {initial}
+      {imageUrl
+        ? <S.AvatarImage src={imageUrl} alt="" />
+        : <S.AvatarGlyph $emoji={!!emoji}>{emoji || initial}</S.AvatarGlyph>}
     </S.AvatarCircle>
   )
 }

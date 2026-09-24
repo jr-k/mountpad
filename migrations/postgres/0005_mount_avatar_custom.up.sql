@@ -1,0 +1,4 @@
+ALTER TABLE mount_points
+    ADD COLUMN IF NOT EXISTS avatar_emoji TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS avatar_image BYTEA,
+    ADD COLUMN IF NOT EXISTS avatar_image_type TEXT NOT NULL DEFAULT '';

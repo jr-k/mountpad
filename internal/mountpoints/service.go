@@ -19,6 +19,7 @@ var (
 	ErrModeInvalid  = errors.New("default_mode must be between 000 and 0777")
 	ErrSlugExists   = errors.New("slug already exists")
 	ErrPrincipal    = errors.New("default owner or group does not exist")
+	ErrAvatarEmoji  = errors.New("avatar emoji is too long")
 )
 
 type Service struct {
@@ -52,6 +53,9 @@ func validateMount(m *models.MountPoint) error {
 	}
 	if m.DefaultMode > 0o777 {
 		return ErrModeInvalid
+	}
+	if len(m.AvatarEmoji) > 32 {
+		return ErrAvatarEmoji
 	}
 	return nil
 }
@@ -90,6 +94,7 @@ type Changes struct {
 	DefaultGroupID                    *int64
 	DefaultMode                       *uint16
 	AvatarColor                       *string
+	AvatarEmoji                       *string
 	FollowSymlinks                    *bool
 }
 
@@ -121,6 +126,9 @@ func (s *Service) Patch(ctx context.Context, id int64, changes Changes) (*models
 		}
 		if changes.AvatarColor != nil {
 			m.AvatarColor = *changes.AvatarColor
+		}
+		if changes.AvatarEmoji != nil {
+			m.AvatarEmoji = strings.TrimSpace(*changes.AvatarEmoji)
 		}
 		if changes.FollowSymlinks != nil {
 			m.FollowSymlinks = *changes.FollowSymlinks
