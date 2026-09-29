@@ -221,7 +221,7 @@ export const RowMenu: React.FC<RowMenuProps> = ({ items, label = 'Open menu', di
               return <S.Divider key={entry.key} />
             }
             if ('type' in entry && entry.type === 'label') {
-              return <S.SectionLabel key={entry.key}>{entry.label}</S.SectionLabel>
+              return null
             }
             const item = entry as RowMenuItem
             return (

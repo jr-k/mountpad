@@ -86,15 +86,6 @@ export const HeroBody = styled.div`
 `
 HeroBody.displayName = 'SettingsPage.HeroBody'
 
-export const Eyebrow = styled.div`
-  font-family: ${({ theme }) => theme.font.mono};
-  font-size: ${({ theme }) => theme.font.size.xs};
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: ${({ theme }) => theme.color.textFaint};
-`
-Eyebrow.displayName = 'SettingsPage.Eyebrow'
-
 export const Heading = styled.h1`
   margin: 0;
   font-size: ${({ theme }) => theme.font.size.h1};
@@ -252,9 +243,7 @@ export const Table = styled.table`
   & thead th {
     background: ${({ theme }) => theme.color.bgSubtle};
     color: ${({ theme }) => theme.color.textFaint};
-    text-transform: uppercase;
     font-size: 10px;
-    letter-spacing: 0.1em;
     font-weight: 600;
   }
   & tbody tr:last-child td {

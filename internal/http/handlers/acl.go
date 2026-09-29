@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/mountpad/mountpad/internal/acl"
 	"github.com/mountpad/mountpad/internal/auth"
@@ -183,6 +186,132 @@ func (h *ACLHandler) Chgrp(w http.ResponseWriter, r *http.Request) {
 	h.upsert(w, mp, rp.Absolute, func(e *manifests.Entry) {
 		e.GroupID = p.GroupID
 	})
+}
+
+type systemPermissionsPayload struct {
+	Path string  `json:"path"`
+	Mode *uint32 `json:"mode"`
+	UID  *int64  `json:"uid"`
+	GID  *int64  `json:"gid"`
+}
+
+// GET /api/fs/{mountId}/system-permissions?path=...
+// Host ownership is intentionally admin-only: numeric UID/GID values belong
+// to the container/host security boundary, not MountPad's logical ACL model.
+func (h *ACLHandler) GetSystemPermissions(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	if user == nil || !user.IsAdmin {
+		h.FS.writeError(w, acl.ErrDenied)
+		return
+	}
+	mp, err := h.FS.loadMount(r)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if err := h.FS.rejectManifest(rel, true); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rp, err := filesystem.Resolve(mp.HostPath, rel, false)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	h.writeSystemPermissions(w, rp)
+}
+
+// PUT /api/fs/{mountId}/system-permissions
+func (h *ACLHandler) SetSystemPermissions(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFrom(r.Context())
+	if user == nil || !user.IsAdmin {
+		h.FS.writeError(w, acl.ErrDenied)
+		return
+	}
+	var p systemPermissionsPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if p.Mode == nil || p.UID == nil || p.GID == nil {
+		http.Error(w, "mode, uid, and gid are required", http.StatusBadRequest)
+		return
+	}
+	if *p.Mode > 0o777 {
+		http.Error(w, "mode must be between 000 and 0777", http.StatusBadRequest)
+		return
+	}
+	const maxSystemID = int64(1<<31 - 1)
+	if *p.UID < 0 || *p.UID > maxSystemID || *p.GID < 0 || *p.GID > maxSystemID {
+		http.Error(w, "uid and gid must be between 0 and 2147483647", http.StatusBadRequest)
+		return
+	}
+	mp, err := h.FS.loadMount(r)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if err := h.FS.rejectManifest(p.Path, true); err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	rp, err := filesystem.Resolve(mp.HostPath, p.Path, false)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	info, err := os.Lstat(rp.Absolute)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		h.FS.writeError(w, filesystem.ErrSymlinkNotAllowed)
+		return
+	}
+	if err := os.Chown(rp.Absolute, int(*p.UID), int(*p.GID)); err != nil {
+		h.writeHostMutationError(w, err)
+		return
+	}
+	if err := os.Chmod(rp.Absolute, os.FileMode(*p.Mode)); err != nil {
+		h.writeHostMutationError(w, err)
+		return
+	}
+	h.writeSystemPermissions(w, rp)
+}
+
+func (h *ACLHandler) writeSystemPermissions(w http.ResponseWriter, rp *filesystem.ResolvedPath) {
+	info, err := os.Lstat(rp.Absolute)
+	if err != nil {
+		h.FS.writeError(w, err)
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		h.FS.writeError(w, filesystem.ErrSymlinkNotAllowed)
+		return
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		http.Error(w, "host metadata unavailable", http.StatusNotImplemented)
+		return
+	}
+	mode := uint32(info.Mode().Perm())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":     rp.Relative,
+		"uid":      uint64(stat.Uid),
+		"gid":      uint64(stat.Gid),
+		"mode":     mode,
+		"mode_str": acl.FormatMode(uint16(mode)),
+	})
+}
+
+func (h *ACLHandler) writeHostMutationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, fs.ErrPermission) {
+		http.Error(w, "host permission denied; the MountPad process lacks chmod/chown privileges", http.StatusForbidden)
+		return
+	}
+	h.FS.writeError(w, err)
 }
 
 // upsert reads the current effective entry for absPath, applies the mutator,

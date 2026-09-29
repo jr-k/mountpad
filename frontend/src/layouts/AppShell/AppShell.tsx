@@ -234,12 +234,11 @@ export const AppShell: React.FC<AppShellProps> = ({ sidebar, explorer, main, sta
       {drawerOpen && <S.Backdrop onClick={closeDrawer} />}
       {hasDrawerContent && (
         <S.PanelGroup $open={drawerOpen}>
-          {/* Drawer chrome only shows below `lg`: a small title + close
-              affordance and the same nav links as the header. On desktop
+          {/* Drawer chrome only shows below `lg`: a close affordance and
+              the same nav links as the header. On desktop
               every child of PanelGroup either has its own grid-area
               (Sidebar/Explorer) or is hidden by media query. */}
           <S.DrawerHeader>
-            <S.DrawerTitle>Menu</S.DrawerTitle>
             <S.DrawerClose type="button" onClick={closeDrawer} aria-label="Close menu">
               <CloseIcon />
             </S.DrawerClose>

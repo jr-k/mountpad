@@ -195,7 +195,6 @@ export const MountPointSidebar: React.FC<MountPointSidebarProps> = ({
     <>
       <S.MountPointSidebarRoot $collapsed={collapsed}>
       <S.Header $collapsed={collapsed}>
-        {!collapsed && <S.Heading>Mounts</S.Heading>}
         <Tooltip
           placement="right"
           delay={500}

@@ -30,7 +30,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ title, lead, steps
         <S.Mark>
           <Logo size={56} title={appName} />
         </S.Mark>
-        <S.Eyebrow>{appName}</S.Eyebrow>
         <S.Title>{title}</S.Title>
         <S.Lead>{lead}</S.Lead>
 

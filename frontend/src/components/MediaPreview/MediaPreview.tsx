@@ -46,7 +46,6 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ src, fileName, kind,
 
   const header = (
     <S.Header>
-      <S.KindBadge>{kind}</S.KindBadge>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {fileName}
       </span>
@@ -106,7 +105,6 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ src, fileName, kind,
               <MusicNoteIcon />
             </S.AudioIconWrap>
             <S.AudioTitle>{fileName}</S.AudioTitle>
-            {size != null && <S.AudioMeta>Audio · {fmtBytes(size)}</S.AudioMeta>}
             <S.AudioPlayer
               src={src}
               controls

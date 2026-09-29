@@ -49,7 +49,6 @@ export const FileDetailsPanel: React.FC<FileDetailsPanelProps> = ({ entry, acl, 
     return (
       <S.FileDetailsPanelRoot style={widthStyle}>
         {resizer}
-        <S.Title>Details</S.Title>
         <S.Row><span>No file selected.</span></S.Row>
       </S.FileDetailsPanelRoot>
     )
@@ -58,7 +57,6 @@ export const FileDetailsPanel: React.FC<FileDetailsPanelProps> = ({ entry, acl, 
     <S.FileDetailsPanelRoot style={widthStyle}>
       {resizer}
       <S.Group>
-        <S.Title>File</S.Title>
         <S.Row><span>Name</span><S.Value>{entry.name}</S.Value></S.Row>
         <S.Row><span>Type</span><S.Value>{entry.is_dir ? 'directory' : 'file'}</S.Value></S.Row>
         <S.Row><span>Path</span><S.Value>/{entry.path}</S.Value></S.Row>
@@ -67,7 +65,6 @@ export const FileDetailsPanel: React.FC<FileDetailsPanelProps> = ({ entry, acl, 
         <S.Row><span>Modified</span><S.Value>{new Date(entry.modified_at).toLocaleString()}</S.Value></S.Row>
       </S.Group>
       <S.Group>
-        <S.Title>Permissions</S.Title>
         <S.Row><span>Mode</span><S.Value>{formatMode(entry.mode)} ({modeToOctal(entry.mode)})</S.Value></S.Row>
         <S.Row><span>Owner</span><S.Value>{entry.owner_id ?? '-'}</S.Value></S.Row>
         <S.Row><span>Group</span><S.Value>{entry.group_id ?? '-'}</S.Value></S.Row>

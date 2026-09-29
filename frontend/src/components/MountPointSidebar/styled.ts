@@ -40,17 +40,10 @@ export const MountPointSidebarRoot = styled.div<{ $collapsed: boolean }>`
 export const Header = styled.div<{ $collapsed: boolean }>`
   display: flex;
   align-items: center;
-  justify-content: ${({ $collapsed }) => ($collapsed ? 'center' : 'space-between')};
+  justify-content: ${({ $collapsed }) => ($collapsed ? 'center' : 'flex-end')};
   width: 100%;
   padding: ${({ theme }) => `${theme.space[2]} ${theme.space[1]}`};
   margin-bottom: ${({ theme }) => theme.space[1]};
-`
-
-export const Heading = styled.div`
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 10px;
-  color: ${({ theme }) => theme.color.textFaint};
 `
 
 export const ToggleButton = styled.button`

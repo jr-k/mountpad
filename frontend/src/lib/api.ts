@@ -101,4 +101,8 @@ export const fsApi = (mountId: string | number) => ({
   setMode:    (path: string, mode: number)        => api.put(`/api/fs/${mountId}/acl`, { path, mode }),
   chown:      (path: string, owner_id: number | null) => api.patch(`/api/fs/${mountId}/owner`, { path, owner_id }),
   chgrp:      (path: string, group_id: number | null) => api.patch(`/api/fs/${mountId}/group`, { path, group_id }),
+  systemPermissions: (path: string) =>
+    api.get<import('@/types/files').SystemPermissionsView>(`/api/fs/${mountId}/system-permissions?path=${encodeURIComponent(path)}`),
+  setSystemPermissions: (body: { path: string; mode: number; uid: number; gid: number }) =>
+    api.put<import('@/types/files').SystemPermissionsView>(`/api/fs/${mountId}/system-permissions`, body),
 })

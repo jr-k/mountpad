@@ -373,7 +373,6 @@ const AccessSettingsPage: React.FC = () => {
           <SP.Hero>
             <SP.HeroIcon><AccessIcon /></SP.HeroIcon>
             <SP.HeroBody>
-              <SP.Eyebrow>Identity &amp; permissions</SP.Eyebrow>
               <SP.Heading>Access</SP.Heading>
               <SP.Lead>
                 Manage who can sign in, their role, and how they're grouped for ACL scoping.

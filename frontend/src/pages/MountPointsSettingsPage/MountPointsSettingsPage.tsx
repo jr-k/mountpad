@@ -266,7 +266,6 @@ const MountPointsSettingsPage: React.FC = () => {
           <SP.Hero>
             <SP.HeroIcon><Logo size={28} /></SP.HeroIcon>
             <SP.HeroBody>
-              <SP.Eyebrow>Workspace configuration</SP.Eyebrow>
               <SP.Heading>Mounts</SP.Heading>
               <SP.Lead>
                 A named host directory exposed to the workspace, with its own default ownership and permissions.

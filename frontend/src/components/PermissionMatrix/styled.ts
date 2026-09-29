@@ -13,8 +13,6 @@ export const PermissionMatrixRoot = styled.div`
 
 export const HeaderCell = styled.div`
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: ${({ theme }) => theme.color.textFaint};
   padding: 4px 6px;
 `

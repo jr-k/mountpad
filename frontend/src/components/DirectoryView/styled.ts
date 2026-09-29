@@ -23,13 +23,6 @@ export const Header = styled.div`
   flex-shrink: 0;
 `
 
-export const HeaderLabel = styled.span`
-  font-size: ${({ theme }) => theme.font.size.xs};
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: ${({ theme }) => theme.color.textFaint};
-`
-
 // HeaderMeta is the trailing "X folders · Y files" line. It sits right
 // after the ViewToggle (which already has margin-left: auto) and we add
 // a small left margin to breathe between the toggle and the counts.
@@ -228,8 +221,6 @@ export const Table = styled.table`
     text-align: left;
     font-weight: 500;
     font-size: ${({ theme }) => theme.font.size.xs};
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: ${({ theme }) => theme.color.textFaint};
     padding: ${({ theme }) => `${theme.space[2]} ${theme.space[3]}`};
     border-bottom: 1px solid ${({ theme }) => theme.color.border};

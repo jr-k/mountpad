@@ -52,8 +52,6 @@ export const Banner = styled.div<{ $tone: 'warn' | 'danger' }>`
   gap: ${({ theme }) => theme.space[2]};
   font-size: ${({ theme }) => theme.font.size.xs};
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   /* The banner sits on a vivid danger/warning surface, so we always want a
      near-black text regardless of the app theme: in dark mode it pops over
      the saturated yellow/red; in light mode the bright surfaces still need
@@ -242,21 +240,13 @@ export const DrawerHeader = styled.div`
   @media (max-width: ${({ theme }) => theme.bp.lg}) {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+  justify-content: flex-end;
     padding: ${({ theme }) => `${theme.space[2]} ${theme.space[3]}`};
     border-bottom: 1px solid ${({ theme }) => theme.color.border};
     flex-shrink: 0;
   }
 `
 DrawerHeader.displayName = 'AppShell.DrawerHeader'
-
-export const DrawerTitle = styled.div`
-  font-size: ${({ theme }) => theme.font.size.sm};
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: ${({ theme }) => theme.color.textFaint};
-`
-DrawerTitle.displayName = 'AppShell.DrawerTitle'
 
 export const DrawerClose = styled.button`
   display: inline-flex;

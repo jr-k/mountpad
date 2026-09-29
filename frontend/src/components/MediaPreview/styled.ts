@@ -30,14 +30,6 @@ export const Header = styled.div`
 `
 Header.displayName = 'MediaPreview.Header'
 
-export const KindBadge = styled.span`
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-  color: ${({ theme }) => theme.color.accent};
-`
-KindBadge.displayName = 'MediaPreview.KindBadge'
-
 // Body is the scroll/centring container. Images get centred both
 // axes; video keeps its native ratio centred at the top; pdf
 // stretches via iframe.
@@ -130,15 +122,6 @@ export const AudioTitle = styled.div`
   max-width: 100%;
 `
 AudioTitle.displayName = 'MediaPreview.AudioTitle'
-
-export const AudioMeta = styled.div`
-  font-family: ${({ theme }) => theme.font.mono};
-  font-size: ${({ theme }) => theme.font.size.xs};
-  color: ${({ theme }) => theme.color.textMuted};
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`
-AudioMeta.displayName = 'MediaPreview.AudioMeta'
 
 // The transport itself. width:100% so the timeline fills the card,
 // margin-top:auto so it pins to the bottom of the card if the

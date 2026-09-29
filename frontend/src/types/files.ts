@@ -97,3 +97,11 @@ export interface ACLView {
   mode_str: string
   source: 'manifest' | 'inherited' | 'default'
 }
+
+export interface SystemPermissionsView {
+  path: string
+  uid: number
+  gid: number
+  mode: number
+  mode_str: string
+}

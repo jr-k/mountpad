@@ -100,7 +100,6 @@ const ProfilePage: React.FC = () => {
           <SP.Hero>
             <SP.HeroIcon><ProfileIcon /></SP.HeroIcon>
             <SP.HeroBody>
-              <SP.Eyebrow>Account</SP.Eyebrow>
               <SP.Heading>Your profile</SP.Heading>
               <SP.Lead>
                 Update how you appear to the rest of the team. Changes apply immediately to

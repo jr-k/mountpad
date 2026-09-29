@@ -116,6 +116,8 @@ func NewRouter(d *Deps) http.Handler {
 				r.Put("/acl", aclH.Set)
 				r.Patch("/owner", aclH.Chown)
 				r.Patch("/group", aclH.Chgrp)
+				r.Get("/system-permissions", aclH.GetSystemPermissions)
+				r.Put("/system-permissions", aclH.SetSystemPermissions)
 			})
 
 			r.Group(func(r chi.Router) {

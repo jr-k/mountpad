@@ -85,15 +85,6 @@ export const Mark = styled.div`
 `
 Mark.displayName = 'WelcomeScreen.Mark'
 
-export const Eyebrow = styled.div`
-  font-family: ${({ theme }) => theme.font.mono};
-  font-size: ${({ theme }) => theme.font.size.xs};
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: ${({ theme }) => theme.color.textFaint};
-`
-Eyebrow.displayName = 'WelcomeScreen.Eyebrow'
-
 export const Title = styled.h1`
   margin: 0;
   font-size: ${({ theme }) => theme.font.size.h1};

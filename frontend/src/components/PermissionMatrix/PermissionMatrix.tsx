@@ -13,23 +13,28 @@ interface PermissionMatrixProps {
    * being able to mutate it.
    */
   disabled?: boolean
+  /** Label for the first triplet: "User" for MountPad, "Owner" for Unix. */
+  ownerLabel?: string
 }
 
-const ROWS: { label: string; bits: [number, number, number] }[] = [
-  { label: 'User',   bits: [BITS.UR, BITS.UW, BITS.UX] },
-  { label: 'Group',  bits: [BITS.GR, BITS.GW, BITS.GX] },
-  { label: 'Others', bits: [BITS.OR, BITS.OW, BITS.OX] },
-]
 const PERMISSIONS = ['read', 'write', 'execute'] as const
 
-export const PermissionMatrix: React.FC<PermissionMatrixProps> = ({ mode, onChange, disabled = false }) => (
-  <S.PermissionMatrixRoot role="group" aria-label="Permission mode">
+export const PermissionMatrix: React.FC<PermissionMatrixProps> = ({
+  mode, onChange, disabled = false, ownerLabel = 'User',
+}) => {
+  const rows: { label: string; bits: [number, number, number] }[] = [
+    { label: ownerLabel, bits: [BITS.UR, BITS.UW, BITS.UX] },
+    { label: 'Group', bits: [BITS.GR, BITS.GW, BITS.GX] },
+    { label: 'Others', bits: [BITS.OR, BITS.OW, BITS.OX] },
+  ]
+  return (
+    <S.PermissionMatrixRoot role="group" aria-label="Permission mode">
     <S.HeaderCell />
     <S.HeaderCell>Read</S.HeaderCell>
     <S.HeaderCell>Write</S.HeaderCell>
     <S.HeaderCell>Execute</S.HeaderCell>
 
-    {ROWS.map((row) => (
+    {rows.map((row) => (
       <React.Fragment key={row.label}>
         <S.RowLabel>{row.label}</S.RowLabel>
         {row.bits.map((bit, idx) => (
@@ -47,5 +52,6 @@ export const PermissionMatrix: React.FC<PermissionMatrixProps> = ({ mode, onChan
         ))}
       </React.Fragment>
     ))}
-  </S.PermissionMatrixRoot>
-)
+    </S.PermissionMatrixRoot>
+  )
+}

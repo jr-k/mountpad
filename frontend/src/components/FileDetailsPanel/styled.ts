@@ -61,14 +61,6 @@ export const DetailsResizer = styled.div<{ $resizing?: boolean }>`
 `
 DetailsResizer.displayName = 'FileDetailsPanel.Resizer'
 
-export const Title = styled.div`
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 10px;
-  color: ${({ theme }) => theme.color.textFaint};
-  margin-bottom: ${({ theme }) => theme.space[2]};
-`
-
 export const Group = styled.div`
   margin-bottom: ${({ theme }) => theme.space[5]};
 `

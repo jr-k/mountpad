@@ -1177,11 +1177,6 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   return (
     <S.DirectoryViewRoot>
       <S.Header>
-        {/* The path itself lives in the toolbar's breadcrumb so we do
-            not duplicate it here; the header keeps a discreet "Folder"
-            label on the left for visual balance, then the view toggle
-            and the entry counts. */}
-        <S.HeaderLabel>Folder</S.HeaderLabel>
         <S.HeaderActions>
           {/* Sort dropdown + order toggle.
               The button group keeps them visually tied: pick the key,

@@ -138,15 +138,3 @@ export const Divider = styled.div`
 `
 Divider.displayName = 'RowMenu.Divider'
 
-// Optional small caption rendered above a group of items. Useful when the
-// menu mixes navigation and destructive actions and we want to label the
-// danger zone explicitly.
-export const SectionLabel = styled.div`
-  padding: 6px 10px 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: ${({ theme }) => theme.color.textFaint};
-`
-SectionLabel.displayName = 'RowMenu.SectionLabel'
