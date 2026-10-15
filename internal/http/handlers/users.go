@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -240,6 +242,207 @@ func (h *UsersHandler) UpdateMyMountOrder(w http.ResponseWriter, r *http.Request
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func validLayoutFolderID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, char := range id {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (h *UsersHandler) UpdateMyMountLayout(w http.ResponseWriter, r *http.Request) {
+	caller := auth.UserFrom(r.Context())
+	if caller == nil || auth.IsSynthetic(caller) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var layout models.MountLayout
+	if err := json.NewDecoder(r.Body).Decode(&layout); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(layout.Items) > 10000 {
+		http.Error(w, "too many layout items", http.StatusBadRequest)
+		return
+	}
+	seenMounts := make(map[int64]struct{})
+	seenFolders := make(map[string]struct{})
+	for index := range layout.Items {
+		item := &layout.Items[index]
+		switch item.Type {
+		case "mount":
+			if item.MountID <= 0 {
+				http.Error(w, "invalid mount id", http.StatusBadRequest)
+				return
+			}
+			if _, duplicate := seenMounts[item.MountID]; duplicate {
+				http.Error(w, "duplicate mount id", http.StatusBadRequest)
+				return
+			}
+			seenMounts[item.MountID] = struct{}{}
+			item.ID, item.Name, item.Icon, item.AvatarColor, item.MountIDs = "", "", "", "", nil
+			item.HasAvatarImage = false
+		case "folder":
+			item.ID = strings.TrimSpace(item.ID)
+			item.Name = strings.TrimSpace(item.Name)
+			item.Icon = strings.TrimSpace(item.Icon)
+			item.AvatarColor = strings.TrimSpace(item.AvatarColor)
+			item.HasAvatarImage = false
+			if !validLayoutFolderID(item.ID) || item.Name == "" || len(item.Name) > 80 ||
+				len(item.Icon) > 32 || len(item.AvatarColor) > 64 {
+				http.Error(w, "invalid folder", http.StatusBadRequest)
+				return
+			}
+			if _, duplicate := seenFolders[item.ID]; duplicate {
+				http.Error(w, "duplicate folder id", http.StatusBadRequest)
+				return
+			}
+			seenFolders[item.ID] = struct{}{}
+			if len(item.MountIDs) > 10000 {
+				http.Error(w, "too many folder mounts", http.StatusBadRequest)
+				return
+			}
+			for _, mountID := range item.MountIDs {
+				if mountID <= 0 {
+					http.Error(w, "invalid mount id", http.StatusBadRequest)
+					return
+				}
+				if _, duplicate := seenMounts[mountID]; duplicate {
+					http.Error(w, "duplicate mount id", http.StatusBadRequest)
+					return
+				}
+				seenMounts[mountID] = struct{}{}
+			}
+			item.MountID = 0
+		default:
+			http.Error(w, "invalid layout item type", http.StatusBadRequest)
+			return
+		}
+	}
+	raw, err := json.Marshal(layout)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.Repo.SetMountLayout(r.Context(), caller.ID, string(raw)); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if avatarIDs, err := h.Repo.MountFolderAvatarIDs(r.Context(), caller.ID); err == nil {
+		for folderID := range avatarIDs {
+			if _, exists := seenFolders[folderID]; !exists {
+				_ = h.Repo.ClearMountFolderAvatar(r.Context(), caller.ID, folderID)
+				delete(avatarIDs, folderID)
+			}
+		}
+		for index := range layout.Items {
+			if layout.Items[index].Type == "folder" {
+				layout.Items[index].HasAvatarImage = avatarIDs[layout.Items[index].ID]
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, layout)
+}
+
+func callerMountFolder(r *http.Request) (*models.User, string, bool) {
+	caller := auth.UserFrom(r.Context())
+	if caller == nil || auth.IsSynthetic(caller) {
+		return caller, "", false
+	}
+	folderID := chi.URLParam(r, "folderId")
+	if !validLayoutFolderID(folderID) {
+		return caller, folderID, false
+	}
+	var layout models.MountLayout
+	if json.Unmarshal([]byte(caller.MountLayout), &layout) != nil {
+		return caller, folderID, false
+	}
+	for _, item := range layout.Items {
+		if item.Type == "folder" && item.ID == folderID {
+			return caller, folderID, true
+		}
+	}
+	return caller, folderID, false
+}
+
+func (h *UsersHandler) GetMyMountFolderAvatar(w http.ResponseWriter, r *http.Request) {
+	caller, folderID, ok := callerMountFolder(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	data, contentType, err := h.Repo.MountFolderAvatar(r.Context(), caller.ID, folderID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.NotFound(w, r)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(data)
+}
+
+func (h *UsersHandler) UploadMyMountFolderAvatar(w http.ResponseWriter, r *http.Request) {
+	caller, folderID, ok := callerMountFolder(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMountAvatarBytes+(1<<20))
+	file, _, err := r.FormFile("avatar")
+	if err != nil {
+		http.Error(w, "avatar image is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxMountAvatarBytes+1))
+	if err != nil {
+		http.Error(w, "unable to read avatar image", http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 || len(data) > maxMountAvatarBytes {
+		http.Error(w, "avatar image must be at most 2 MB", http.StatusBadRequest)
+		return
+	}
+	contentType := http.DetectContentType(data)
+	if !allowedMountAvatarTypes[contentType] {
+		http.Error(w, "avatar must be a JPEG, PNG, GIF, or WebP image", http.StatusBadRequest)
+		return
+	}
+	if err := h.Repo.SetMountFolderAvatar(r.Context(), caller.ID, folderID, data, contentType); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UsersHandler) DeleteMyMountFolderAvatar(w http.ResponseWriter, r *http.Request) {
+	caller, folderID, ok := callerMountFolder(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.Repo.ClearMountFolderAvatar(r.Context(), caller.ID, folderID); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

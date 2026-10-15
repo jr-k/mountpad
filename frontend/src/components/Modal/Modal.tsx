@@ -72,7 +72,12 @@ export const Modal: React.FC<ModalProps> = ({ open, title, onClose, footer, chil
     const focusFrame = window.requestAnimationFrame(() => {
       const dialog = dialogRef.current
       if (!dialog) return
+      // Explicit autofocus remains authoritative for rename/upload forms.
+      // Otherwise the last enabled footer button is the modal's primary
+      // action by convention (Confirm, Delete, Save, OK…), so focusing it
+      // lets the user validate immediately with Enter.
       const target = dialog.querySelector<HTMLElement>('[autofocus]')
+        ?? dialog.querySelector<HTMLElement>('footer button:last-of-type:not([disabled])')
         ?? dialog.querySelector<HTMLElement>(focusableSelector)
         ?? dialog
       target.focus()

@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN mount_layout TEXT NOT NULL DEFAULT '';

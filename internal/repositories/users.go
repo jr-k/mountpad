@@ -18,13 +18,13 @@ var ErrLastActiveAdmin = errors.New("last active administrator")
 // Keep this column list synchronised with `scanUser`. Profile fields
 // (first_name/last_name/email/avatar_color) were added in migration 0002
 // and default to empty strings server-side so old rows scan cleanly.
-const userCols = "id, username, display_name, first_name, last_name, email, avatar_color, mount_order, password_hash, is_admin, is_active, created_at, updated_at"
+const userCols = "id, username, display_name, first_name, last_name, email, avatar_color, mount_order, mount_layout, password_hash, is_admin, is_active, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*models.User, error) {
 	var u models.User
 	if err := row.Scan(
 		&u.ID, &u.Username, &u.DisplayName,
-		&u.FirstName, &u.LastName, &u.Email, &u.AvatarColor, &u.MountOrder,
+		&u.FirstName, &u.LastName, &u.Email, &u.AvatarColor, &u.MountOrder, &u.MountLayout,
 		&u.PasswordHash, &u.IsAdmin, &u.IsActive,
 		&u.CreatedAt, &u.UpdatedAt,
 	); err != nil {
@@ -128,6 +128,73 @@ func (r *UsersRepo) SetMountOrder(ctx context.Context, id int64, order string) e
 	if err == nil && affected == 0 {
 		return db.ErrNotFound
 	}
+	return err
+}
+
+func (r *UsersRepo) SetMountLayout(ctx context.Context, id int64, layout string) error {
+	q := r.DB.Placeholder("UPDATE users SET mount_layout = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+	result, err := r.DB.ExecContext(ctx, q, layout, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return db.ErrNotFound
+	}
+	return err
+}
+
+func (r *UsersRepo) SetMountFolderAvatar(ctx context.Context, userID int64, folderID string, data []byte, contentType string) error {
+	var q string
+	if r.DB.Driver == "postgres" {
+		q = `INSERT INTO user_mount_folder_avatars (user_id, folder_id, avatar_image, avatar_image_type)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (user_id, folder_id) DO UPDATE
+			SET avatar_image = EXCLUDED.avatar_image, avatar_image_type = EXCLUDED.avatar_image_type`
+	} else {
+		q = `INSERT INTO user_mount_folder_avatars (user_id, folder_id, avatar_image, avatar_image_type)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT (user_id, folder_id) DO UPDATE
+			SET avatar_image = excluded.avatar_image, avatar_image_type = excluded.avatar_image_type`
+	}
+	_, err := r.DB.ExecContext(ctx, q, userID, folderID, data, contentType)
+	return err
+}
+
+func (r *UsersRepo) MountFolderAvatar(ctx context.Context, userID int64, folderID string) ([]byte, string, error) {
+	q := r.DB.Placeholder(`SELECT avatar_image, avatar_image_type
+		FROM user_mount_folder_avatars WHERE user_id = ? AND folder_id = ?`)
+	var data []byte
+	var contentType string
+	if err := r.DB.QueryRowContext(ctx, q, userID, folderID).Scan(&data, &contentType); errors.Is(err, sql.ErrNoRows) {
+		return nil, "", db.ErrNotFound
+	} else if err != nil {
+		return nil, "", err
+	}
+	return data, contentType, nil
+}
+
+func (r *UsersRepo) MountFolderAvatarIDs(ctx context.Context, userID int64) (map[string]bool, error) {
+	q := r.DB.Placeholder("SELECT folder_id FROM user_mount_folder_avatars WHERE user_id = ?")
+	rows, err := r.DB.QueryContext(ctx, q, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var folderID string
+		if err := rows.Scan(&folderID); err != nil {
+			return nil, err
+		}
+		out[folderID] = true
+	}
+	return out, rows.Err()
+}
+
+func (r *UsersRepo) ClearMountFolderAvatar(ctx context.Context, userID int64, folderID string) error {
+	q := r.DB.Placeholder("DELETE FROM user_mount_folder_avatars WHERE user_id = ? AND folder_id = ?")
+	_, err := r.DB.ExecContext(ctx, q, userID, folderID)
 	return err
 }
 

@@ -15,6 +15,15 @@ import styled, { css } from 'styled-components'
 const COLLAPSED_WIDTH = '56px'
 const EXPANDED_WIDTH = '220px'
 
+const luminance = (hex: string): number => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return 0.5
+  const r = parseInt(m[1].slice(0, 2), 16) / 255
+  const g = parseInt(m[1].slice(2, 4), 16) / 255
+  const b = parseInt(m[1].slice(4, 6), 16) / 255
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
 export const MountPointSidebarRoot = styled.div<{ $collapsed: boolean }>`
   width: ${({ $collapsed }) => ($collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH)};
   height: 100%;
@@ -118,6 +127,70 @@ export const Item = styled.button<{ $active?: boolean }>`
   &:hover { background: ${({ theme }) => theme.color.bgElev}; }
 `
 
+export const FolderBlock = styled.div<{ $collapsed: boolean; $open: boolean }>`
+  display: flex;
+  flex-direction: column;
+  align-items: ${({ $collapsed }) => ($collapsed ? 'center' : 'stretch')};
+  width: 100%;
+  gap: 2px;
+  padding: ${({ $open, $collapsed }) => ($open && $collapsed ? '4px 0' : '0')};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ $open, $collapsed, theme }) => ($open && $collapsed ? theme.color.bgElev : 'transparent')};
+`
+
+export const FolderButton = styled.button<{ $collapsed: boolean; $active: boolean; $open: boolean }>`
+  display: flex;
+  align-items: center;
+  justify-content: ${({ $collapsed }) => ($collapsed ? 'center' : 'flex-start')};
+  gap: ${({ theme }) => theme.space[2]};
+  width: ${({ $collapsed }) => ($collapsed ? '40px' : '100%')};
+  height: ${({ $collapsed }) => ($collapsed ? '40px' : 'auto')};
+  padding: ${({ $collapsed }) => ($collapsed ? '0' : '6px 8px')};
+  border: 1px solid ${({ $active, theme }) => ($active ? theme.color.accentMuted : 'transparent')};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ $open, theme }) => ($open ? theme.color.bgElev : 'transparent')};
+  color: ${({ theme }) => theme.color.text};
+  text-align: left;
+  cursor: pointer;
+  &:hover { background: ${({ theme }) => theme.color.bgElev}; }
+`
+
+export const FolderAvatar = styled.span<{ $bg: string }>`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: ${({ $bg }) => $bg};
+  color: ${({ $bg }) => (luminance($bg) > 0.55 ? '#1f2328' : '#ffffff')};
+  font-size: 18px;
+  line-height: 1;
+`
+
+export const FolderCaret = styled.span<{ $open: boolean }>`
+  display: inline-flex;
+  color: ${({ theme }) => theme.color.textMuted};
+  transform: rotate(${({ $open }) => ($open ? 180 : 0)}deg);
+  transition: transform 120ms ease;
+`
+
+export const FolderChildren = styled.div<{ $collapsed: boolean }>`
+  display: flex;
+  flex-direction: column;
+  align-items: ${({ $collapsed }) => ($collapsed ? 'center' : 'stretch')};
+  width: 100%;
+  gap: 2px;
+  padding-left: ${({ $collapsed }) => ($collapsed ? '0' : '12px')};
+`
+
+export const FolderMountItem = styled(Item)`
+  padding-top: 5px;
+  padding-bottom: 5px;
+`
+
 // Compact (collapsed) variant: button is just the avatar, centered.
 export const RailItem = styled.button<{ $active?: boolean }>`
   display: inline-flex;
@@ -152,19 +225,6 @@ export const RailItem = styled.button<{ $active?: boolean }>`
       & > span { box-shadow: 0 0 0 2px color-mix(in srgb, ${theme.color.accent} 60%, transparent); }
     `}
 `
-
-// luminance picks a near-black or near-white text token based on the
-// background colour, with the same 0.55 threshold the shared Avatar
-// uses. Inlined so we don't import a Browser-only helper into a
-// styled template (which runs server-side too in test environments).
-const luminance = (hex: string): number => {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
-  if (!m) return 0.5
-  const r = parseInt(m[1].slice(0, 2), 16) / 255
-  const g = parseInt(m[1].slice(2, 4), 16) / 255
-  const b = parseInt(m[1].slice(4, 6), 16) / 255
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
-}
 
 // Rounded-square avatar with the mount initial. Used both as the
 // whole button in collapsed mode and inside expanded items / dropdown
@@ -217,6 +277,19 @@ export const OrderList = styled.div`
   gap: ${({ theme }) => theme.space[1]};
 `
 
+export const LayoutToolbar = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: ${({ theme }) => theme.space[3]};
+`
+
+export const LayoutHint = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.color.textMuted};
+  font-size: ${({ theme }) => theme.font.size.sm};
+`
+
 export const OrderRow = styled.div`
   display: flex;
   align-items: center;
@@ -225,6 +298,11 @@ export const OrderRow = styled.div`
   border: 1px solid ${({ theme }) => theme.color.border};
   border-radius: ${({ theme }) => theme.radius.md};
   background: ${({ theme }) => theme.color.bgSubtle};
+`
+
+export const OrderIdentity = styled.div`
+  flex: 1;
+  min-width: 0;
 `
 
 export const OrderActions = styled.div`
@@ -245,6 +323,101 @@ export const OrderMoveButton = styled.button`
     opacity: 0.35;
     cursor: default;
   }
+`
+
+export const FolderSelect = styled.select`
+  min-width: 130px;
+  max-width: 180px;
+  height: 32px;
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ theme }) => theme.color.bgElev};
+  color: ${({ theme }) => theme.color.text};
+  padding: 0 ${({ theme }) => theme.space[2]};
+`
+
+export const FolderEditor = styled.section`
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ theme }) => theme.color.bgSubtle};
+  overflow: hidden;
+`
+
+export const FolderEditorHeader = styled.div`
+  display: grid;
+  grid-template-columns: 42px minmax(140px, 1fr) auto;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => theme.space[2]};
+
+  @media (max-width: ${({ theme }) => theme.bp.sm}) {
+    grid-template-columns: 42px 1fr;
+    & > ${OrderActions} { grid-column: 1 / -1; }
+  }
+`
+
+export const FolderIconInput = styled.input`
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  text-align: center;
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ theme }) => theme.color.bgElev};
+  color: ${({ theme }) => theme.color.text};
+  font-size: 20px;
+`
+
+export const FolderEditorChildren = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: ${({ theme }) => theme.space[2]};
+  border-top: 1px solid ${({ theme }) => theme.color.border};
+  background: ${({ theme }) => theme.color.bgPanel};
+`
+
+export const FolderAppearance = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => `0 ${theme.space[2]} ${theme.space[2]}`};
+  flex-wrap: wrap;
+
+  & > ${FolderAvatar} {
+    width: 38px;
+    height: 38px;
+  }
+`
+
+export const FolderEditorMount = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  min-height: 40px;
+  padding: 4px ${({ theme }) => theme.space[2]};
+  border-radius: ${({ theme }) => theme.radius.sm};
+  background: ${({ theme }) => theme.color.bgSubtle};
+
+  & > div:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+  }
+`
+
+export const EmptyFolder = styled.div`
+  padding: ${({ theme }) => theme.space[2]};
+  color: ${({ theme }) => theme.color.textFaint};
+  font-size: ${({ theme }) => theme.font.size.sm};
+`
+
+export const FolderDeleteButton = styled.button`
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: ${({ theme }) => theme.color.danger};
+  cursor: pointer;
+  &:disabled { opacity: 0.4; cursor: default; }
 `
 
 export const OrderError = styled.p`
@@ -361,6 +534,23 @@ export const OptionList = styled.div`
   gap: 2px;
 `
 OptionList.displayName = 'MountPointSidebar.OptionList'
+
+export const MobileFolderGroup = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: ${({ theme }) => `${theme.space[1]} 0 ${theme.space[2]}`};
+`
+
+export const MobileFolderName = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => `${theme.space[1]} ${theme.space[2]}`};
+  color: ${({ theme }) => theme.color.textMuted};
+  font-size: ${({ theme }) => theme.font.size.sm};
+  font-weight: 600;
+`
 
 // Individual option row rendered inside the mount picker modal.
 // Mirrors the desktop Item but doesn't draw its own border (the

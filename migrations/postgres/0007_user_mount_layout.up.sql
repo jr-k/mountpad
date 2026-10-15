@@ -1,0 +1,2 @@
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS mount_layout TEXT NOT NULL DEFAULT '';

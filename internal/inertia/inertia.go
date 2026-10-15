@@ -140,10 +140,74 @@ func SharedProps(r *http.Request, gate *auth.Gate, mounts *repositories.MountPoi
 	props["auth"] = authBlock
 	if mounts != nil {
 		if list, err := mounts.ListActive(r.Context()); err == nil {
-			props["mount_points"] = orderedMounts(visibleMounts(list, user, resolver), user)
+			ordered, layout := mountLayoutFor(visibleMounts(list, user, resolver), user)
+			if user != nil && !auth.IsSynthetic(user) {
+				if avatarIDs, avatarErr := gate.Users.MountFolderAvatarIDs(r.Context(), user.ID); avatarErr == nil {
+					for index := range layout.Items {
+						if layout.Items[index].Type == "folder" {
+							layout.Items[index].HasAvatarImage = avatarIDs[layout.Items[index].ID]
+						}
+					}
+				}
+			}
+			props["mount_points"] = ordered
+			props["mount_layout"] = layout
 		}
 	}
 	return props
+}
+
+func mountLayoutFor(list []*models.MountPoint, user *models.User) ([]*models.MountPoint, models.MountLayout) {
+	var stored models.MountLayout
+	if user == nil || user.MountLayout == "" ||
+		json.Unmarshal([]byte(user.MountLayout), &stored) != nil || len(stored.Items) == 0 {
+		ordered := orderedMounts(list, user)
+		layout := models.MountLayout{Items: make([]models.MountLayoutItem, 0, len(ordered))}
+		for _, mount := range ordered {
+			layout.Items = append(layout.Items, models.MountLayoutItem{Type: "mount", MountID: mount.ID})
+		}
+		return ordered, layout
+	}
+
+	remaining := make(map[int64]*models.MountPoint, len(list))
+	for _, mount := range list {
+		remaining[mount.ID] = mount
+	}
+	ordered := make([]*models.MountPoint, 0, len(list))
+	layout := models.MountLayout{Items: make([]models.MountLayoutItem, 0, len(stored.Items))}
+	for _, item := range stored.Items {
+		switch item.Type {
+		case "mount":
+			if mount, ok := remaining[item.MountID]; ok {
+				ordered = append(ordered, mount)
+				layout.Items = append(layout.Items, models.MountLayoutItem{Type: "mount", MountID: mount.ID})
+				delete(remaining, mount.ID)
+			}
+		case "folder":
+			folder := models.MountLayoutItem{
+				Type: "folder", ID: item.ID, Name: item.Name, Icon: item.Icon,
+				AvatarColor: item.AvatarColor,
+				MountIDs:    make([]int64, 0, len(item.MountIDs)),
+			}
+			for _, mountID := range item.MountIDs {
+				if mount, ok := remaining[mountID]; ok {
+					folder.MountIDs = append(folder.MountIDs, mountID)
+					ordered = append(ordered, mount)
+					delete(remaining, mountID)
+				}
+			}
+			layout.Items = append(layout.Items, folder)
+		}
+	}
+	// Mounts created or made visible after the preference was saved remain
+	// reachable and are appended as ungrouped entries.
+	for _, mount := range list {
+		if _, ok := remaining[mount.ID]; ok {
+			ordered = append(ordered, mount)
+			layout.Items = append(layout.Items, models.MountLayoutItem{Type: "mount", MountID: mount.ID})
+		}
+	}
+	return ordered, layout
 }
 
 func orderedMounts(list []*models.MountPoint, user *models.User) []*models.MountPoint {

@@ -19,7 +19,7 @@ import { LoadingState } from '@/components/LoadingState'
 import { WelcomeScreen } from '@/components/WelcomeScreen'
 import { StatusBarParts as SB } from '@/components/StatusBar'
 import { fsApi, HttpError } from '@/lib/api'
-import type { UploadFileResult } from '@/lib/api'
+import type { UploadFileResult, UploadInput } from '@/lib/api'
 import type { MoveError } from '@/lib/dnd'
 import { useDirty } from '@/hooks/useDirty'
 import { useSaveShortcut } from '@/hooks/useSaveShortcut'
@@ -53,6 +53,11 @@ function downloadErrorMessage(status: number, body: string, subjects: { name?: s
     default:
       return body || `Download failed (HTTP ${status}).`
   }
+}
+
+const validUploadName = (value: string): boolean => {
+  const name = value.trim()
+  return name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\')
 }
 
 const WorkspacePage: React.FC = () => {
@@ -395,6 +400,12 @@ const WorkspacePage: React.FC = () => {
     results: UploadFileResult[]
     targetDir: string
   } | null>(null)
+  const [pendingUpload, setPendingUpload] = useState<{
+    mountId: number
+    targetDir: string
+    files: UploadInput[]
+    overwrite: boolean
+  } | null>(null)
   // dragCounter copes with the way HTML5 DnD fires dragenter/dragleave
   // every time a drag crosses a child boundary. We track the net
   // depth so the overlay stays on until the user has really left the
@@ -408,13 +419,26 @@ const WorkspacePage: React.FC = () => {
   const canUpload = !!activeMount
   const canDragDrop = canUpload
 
-  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+  const queueUpload = useCallback((files: FileList | File[]) => {
     if (!activeMount) return
-    const list = Array.from(files).filter((f) => f && f.name && f.name !== '.DS_Store')
+    const list = Array.from(files)
+      .filter((file) => file && file.name && file.name !== '.DS_Store')
+      .map((file) => ({ file, name: file.name }))
     if (list.length === 0) return
+    setPendingUpload({
+      mountId: activeMount.id,
+      targetDir: uploadTargetDir,
+      files: list,
+      overwrite: false,
+    })
+  }, [activeMount, uploadTargetDir])
+
+  const uploadFiles = useCallback(async () => {
+    if (!pendingUpload) return
+    const pending = pendingUpload
     setUploading(true)
     try {
-      const res = await fsApi(activeMount.id).upload(uploadTargetDir, list)
+      const res = await fsApi(pending.mountId).upload(pending.targetDir, pending.files, pending.overwrite)
       // Only surface a modal if there's something to report (errors,
       // conflicts, or a multi-file batch). A single successful upload
       // refreshes silently - the new entry appearing in the listing
@@ -427,13 +451,14 @@ const WorkspacePage: React.FC = () => {
     } catch (e: unknown) {
       const body = e instanceof HttpError && e.body ? e.body : 'Upload failed.'
       setUploadSummary({
-        results: list.map((f) => ({ name: f.name, status: 'error', error: body })),
-        targetDir: uploadTargetDir,
+        results: pending.files.map((entry) => ({ name: entry.name, status: 'error', error: body })),
+        targetDir: pending.targetDir,
       })
     } finally {
       setUploading(false)
+      setPendingUpload(null)
     }
-  }, [activeMount, uploadTargetDir])
+  }, [pendingUpload])
 
   const onPickFiles = useCallback(() => {
     if (!fileInputRef.current) return
@@ -446,7 +471,7 @@ const WorkspacePage: React.FC = () => {
 
   const onFileInputChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const fl = e.target.files
-    if (fl && fl.length > 0) void uploadFiles(fl)
+    if (fl && fl.length > 0) queueUpload(fl)
   }
 
   // Drag handlers attached to the main panel wrapper. We only react
@@ -485,7 +510,7 @@ const WorkspacePage: React.FC = () => {
     dragCounter.current = 0
     setIsDragging(false)
     const files = e.dataTransfer?.files
-    if (files && files.length > 0) void uploadFiles(files)
+    if (files && files.length > 0) queueUpload(files)
   }
 
   // ── Extract ─────────────────────────────────────────────────────────
@@ -1001,6 +1026,7 @@ const WorkspacePage: React.FC = () => {
         sidebar={
           <MountPointSidebar
             mountPoints={mountPoints}
+            layout={props.mount_layout}
             activeMountId={activeMount?.id}
             onSelect={(mp) => { setActiveMount(mp); setActiveFile(undefined); setActiveDir('') }}
           />
@@ -1323,6 +1349,66 @@ const WorkspacePage: React.FC = () => {
         }
       >
         <S.DownloadError>{downloadError}</S.DownloadError>
+      </Modal>
+
+      <Modal
+        open={!!pendingUpload}
+        title={pendingUpload?.files.length === 1 ? 'Upload file' : 'Upload files'}
+        onClose={() => { if (!uploading) setPendingUpload(null) }}
+        onSubmit={() => {
+          if (!uploading && pendingUpload && pendingUpload.files.every((entry) => validUploadName(entry.name))) {
+            void uploadFiles()
+          }
+        }}
+        footer={<>
+          <Button variant="ghost" onClick={() => setPendingUpload(null)} disabled={uploading}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={() => { void uploadFiles() }}
+            disabled={uploading || !pendingUpload || pendingUpload.files.some((entry) => !validUploadName(entry.name))}
+          >
+            {uploading ? 'Uploading…' : 'OK'}
+          </Button>
+        </>}
+      >
+        {pendingUpload && (
+          <>
+            <S.UploadRenameIntro>
+              Confirm or change the destination {pendingUpload.files.length === 1 ? 'name' : 'names'}.
+            </S.UploadRenameIntro>
+            <S.UploadRenameList>
+              {pendingUpload.files.map((entry, index) => (
+                <Input
+                  key={`${entry.file.name}-${entry.file.lastModified}-${index}`}
+                  label={pendingUpload.files.length === 1 ? 'Filename' : `File ${index + 1}`}
+                  value={entry.name}
+                  autoFocus={index === 0}
+                  onFocus={index === 0 ? (event) => event.currentTarget.select() : undefined}
+                  onChange={(event) => {
+                    const name = event.target.value
+                    setPendingUpload((current) => current ? {
+                      ...current,
+                      files: current.files.map((candidate, candidateIndex) =>
+                        candidateIndex === index ? { ...candidate, name } : candidate),
+                    } : null)
+                  }}
+                />
+              ))}
+            </S.UploadRenameList>
+            <S.UploadOverwriteOption>
+              <input
+                type="checkbox"
+                checked={pendingUpload.overwrite}
+                onChange={(event) => setPendingUpload((current) =>
+                  current ? { ...current, overwrite: event.target.checked } : null)}
+              />
+              <span>
+                <strong>Overwrite</strong>
+                <small>Replace files that already exist with the same name.</small>
+              </span>
+            </S.UploadOverwriteOption>
+          </>
+        )}
       </Modal>
 
       {/* Upload summary: only shown when something is worth reporting

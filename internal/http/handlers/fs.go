@@ -1080,13 +1080,12 @@ func (h *FSHandler) DeepDelete(w http.ResponseWriter, r *http.Request) {
 // fully in memory, so multi-gigabyte uploads run in O(1) memory and
 // without hitting the default http.Request.ParseMultipartForm cap.
 //
-// Each upload is treated as "create new file": if a name already
-// exists we report it as a partial failure rather than silently
-// clobbering data. The response is always 200 with a per-file
-// status array, so the frontend can surface "3 uploaded, 1
-// conflict" without disambiguating an HTTP status code.
+// Existing files are only replaced when overwrite=1 is explicitly supplied.
+// Otherwise they are reported as conflicts. Replacements additionally require
+// ActionWrite on the existing file, not just ActionCreate on its directory.
 //
-// ACL: ActionCreate on the target directory. Manifest filenames,
+// ACL: ActionCreate on the target directory for new files, ActionWrite on an
+// existing destination when overwrite is enabled. Manifest filenames,
 // .mountpad/, and the *.tmp manifest staging files are rejected
 // up front so an upload can never bypass the rejectManifest gate
 // that protects every other write path.
@@ -1099,6 +1098,7 @@ func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dirRel := r.URL.Query().Get("path")
+	overwrite := r.URL.Query().Get("overwrite") == "1" || r.URL.Query().Get("overwrite") == "true"
 	dirRP, err := h.resolve(r, mp, dirRel)
 	if err != nil {
 		h.writeError(w, err)
@@ -1117,10 +1117,7 @@ func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mc := mountpoints.MountContext(mp)
-	if err := h.Resolver.Check(user, mc, dirRP.Absolute, true, acl.ActionCreate); err != nil {
-		h.writeError(w, err)
-		return
-	}
+	createErr := h.Resolver.Check(user, mc, dirRP.Absolute, true, acl.ActionCreate)
 
 	reader, err := r.MultipartReader()
 	if err != nil {
@@ -1180,15 +1177,54 @@ func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		destAbs := filepath.Join(dirRP.Absolute, name)
-		if _, err := os.Lstat(destAbs); err == nil {
-			res.Status = "conflict"
-			res.Error = "already exists"
+		ownershipRef := dirRP.Absolute
+		targetMode := os.FileMode(0o600)
+		if existing, err := os.Lstat(destAbs); err == nil {
+			if !overwrite {
+				res.Status = "conflict"
+				res.Error = "already exists"
+				results = append(results, res)
+				_ = part.Close()
+				continue
+			}
+			if existing.Mode()&os.ModeSymlink != 0 {
+				res.Status = "error"
+				res.Error = "symlink not allowed"
+				results = append(results, res)
+				_ = part.Close()
+				continue
+			}
+			if existing.IsDir() {
+				res.Status = "error"
+				res.Error = "a directory already uses this name"
+				results = append(results, res)
+				_ = part.Close()
+				continue
+			}
+			if err := h.Resolver.Check(user, mc, destAbs, false, acl.ActionWrite); err != nil {
+				res.Status = "error"
+				res.Error = "permission denied"
+				results = append(results, res)
+				_ = part.Close()
+				continue
+			}
+			ownershipRef = destAbs
+			targetMode = existing.Mode().Perm()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			res.Status = "error"
+			res.Error = err.Error()
+			results = append(results, res)
+			_ = part.Close()
+			continue
+		} else if createErr != nil {
+			res.Status = "error"
+			res.Error = "permission denied"
 			results = append(results, res)
 			_ = part.Close()
 			continue
 		}
 
-		size, err := streamPartToFile(part, dirRP.Absolute, name)
+		size, err := streamPartToFile(part, dirRP.Absolute, name, ownershipRef, targetMode)
 		_ = part.Close()
 		if err != nil {
 			res.Status = "error"
@@ -1212,7 +1248,7 @@ func (h *FSHandler) Upload(w http.ResponseWriter, r *http.Request) {
 // alongside the destination so the final rename is an atomic same-
 // filesystem operation (no cross-device copy fallback). On any error
 // the partial temp file is cleaned up.
-func streamPartToFile(src io.Reader, dirAbs, name string) (int64, error) {
+func streamPartToFile(src io.Reader, dirAbs, name, ownershipRef string, mode os.FileMode) (int64, error) {
 	// Same naming convention as WriteFileAtomic so a stray temp file
 	// is visually recognisable as ours and matches the exclusion
 	// rule applied by the explorer's hidden-file filter.
@@ -1236,12 +1272,16 @@ func streamPartToFile(src io.Reader, dirAbs, name string) (int64, error) {
 		os.Remove(tmpName)
 		return 0, err
 	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		os.Remove(tmpName)
+		return 0, err
+	}
+	filesystem.InheritOwnership(tmpName, ownershipRef)
 	dest := filepath.Join(dirAbs, name)
 	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
 		return 0, err
 	}
-	filesystem.InheritOwnership(dest, dirAbs)
 	return n, nil
 }
 

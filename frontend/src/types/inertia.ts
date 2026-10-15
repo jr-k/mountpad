@@ -30,5 +30,22 @@ export interface SharedProps {
   app: AppInfo
   auth: AuthState
   mount_points?: MountPoint[]
+  mount_layout?: MountLayout
   flash?: Record<string, string>
+}
+
+export type MountLayoutItem =
+  | { type: 'mount'; mount_id: number }
+  | {
+      type: 'folder'
+      id: string
+      name: string
+      icon: string
+      avatar_color?: string
+      has_avatar_image?: boolean
+      mount_ids: number[]
+    }
+
+export interface MountLayout {
+  items: MountLayoutItem[]
 }

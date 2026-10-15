@@ -100,6 +100,46 @@ export const HiddenFileInput = styled.input.attrs({ type: 'file', multiple: true
 `
 HiddenFileInput.displayName = 'WorkspacePage.HiddenFileInput'
 
+export const UploadRenameIntro = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.color.textMuted};
+  font-size: ${({ theme }) => theme.font.size.sm};
+`
+
+export const UploadRenameList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: ${({ theme }) => theme.space[2]};
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 2px;
+`
+
+export const UploadOverwriteOption = styled.label`
+  display: flex;
+  align-items: flex-start;
+  gap: ${({ theme }) => theme.space[2]};
+  padding: ${({ theme }) => theme.space[3]};
+  border: 1px solid ${({ theme }) => theme.color.border};
+  border-radius: ${({ theme }) => theme.radius.md};
+  background: ${({ theme }) => theme.color.bgSubtle};
+  cursor: pointer;
+
+  input {
+    margin-top: 3px;
+  }
+
+  span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  small {
+    color: ${({ theme }) => theme.color.textMuted};
+  }
+`
+
 // UploadError mirrors DeleteError but for the per-file upload result
 // banner: stays inside the upload-result modal body. Same family of
 // red-tinted treatment so the visual language is consistent across

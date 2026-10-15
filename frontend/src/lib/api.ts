@@ -42,6 +42,11 @@ export interface UploadResponse {
   files: UploadFileResult[]
 }
 
+export interface UploadInput {
+  file: File
+  name: string
+}
+
 export const fsApi = (mountId: string | number) => ({
   list:       (path: string)                      => api.get<import('@/types/files').ListResponse>(`/api/fs/${mountId}/list?path=${encodeURIComponent(path)}`),
   read:       (path: string)                      => api.get<import('@/types/files').ReadResponse>(`/api/fs/${mountId}/read?path=${encodeURIComponent(path)}`),
@@ -76,10 +81,10 @@ export const fsApi = (mountId: string | number) => ({
   // boundary header from the FormData body automatically, so we
   // strip the default JSON Content-Type that the shared `request`
   // helper would otherwise inject.
-  upload:     async (dirPath: string, files: File[]): Promise<UploadResponse> => {
+  upload:     async (dirPath: string, files: UploadInput[], overwrite = false): Promise<UploadResponse> => {
     const form = new FormData()
-    for (const f of files) form.append('files', f, f.name)
-    const url = `/api/fs/${mountId}/upload?path=${encodeURIComponent(dirPath)}`
+    for (const entry of files) form.append('files', entry.file, entry.name)
+    const url = `/api/fs/${mountId}/upload?path=${encodeURIComponent(dirPath)}&overwrite=${overwrite ? '1' : '0'}`
     const res = await fetch(url, {
       method: 'POST',
       credentials: 'same-origin',

@@ -15,12 +15,28 @@ type User struct {
 	// box without forcing a profile edit.
 	AvatarColor  string    `json:"avatar_color"`
 	MountOrder   string    `json:"-"`
+	MountLayout  string    `json:"-"`
 	PasswordHash string    `json:"-"`
 	IsAdmin      bool      `json:"is_admin"`
 	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	GroupIDs     []int64   `json:"group_ids,omitempty"`
+}
+
+type MountLayout struct {
+	Items []MountLayoutItem `json:"items"`
+}
+
+type MountLayoutItem struct {
+	Type           string  `json:"type"`
+	MountID        int64   `json:"mount_id,omitempty"`
+	ID             string  `json:"id,omitempty"`
+	Name           string  `json:"name,omitempty"`
+	Icon           string  `json:"icon,omitempty"`
+	AvatarColor    string  `json:"avatar_color,omitempty"`
+	HasAvatarImage bool    `json:"has_avatar_image,omitempty"`
+	MountIDs       []int64 `json:"mount_ids,omitempty"`
 }
 
 type Group struct {

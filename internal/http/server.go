@@ -87,6 +87,10 @@ func NewRouter(d *Deps) http.Handler {
 			// fields before persisting, so it's safe to expose to members.
 			r.Patch("/me", usersH.UpdateMe)
 			r.Put("/me/mount-order", usersH.UpdateMyMountOrder)
+			r.Put("/me/mount-layout", usersH.UpdateMyMountLayout)
+			r.Get("/me/mount-folders/{folderId}/avatar", usersH.GetMyMountFolderAvatar)
+			r.Post("/me/mount-folders/{folderId}/avatar", usersH.UploadMyMountFolderAvatar)
+			r.Delete("/me/mount-folders/{folderId}/avatar", usersH.DeleteMyMountFolderAvatar)
 
 			// Directory endpoints: lightweight {id, name} listings, safe to
 			// expose to non-admins so the file tree can resolve owner/group
