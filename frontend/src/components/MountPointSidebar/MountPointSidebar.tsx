@@ -27,7 +27,8 @@ const LS_KEY = 'mountpad:mount-sidebar:collapsed'
 // override is set on the row, so every mount looks "owned" without
 // requiring an admin to revisit each one.
 const mountInitial = (mp: MountPoint): string => initialFor(mp.name, mp.slug)
-const mountColor   = (mp: MountPoint): string => resolveAvatarColor(mp.avatar_color, mp.id)
+const mountColor = (mp: MountPoint): string =>
+  mp.avatar_color?.trim() ? resolveAvatarColor(mp.avatar_color, mp.id) : 'transparent'
 const mountAvatarContent = (mp: MountPoint): React.ReactNode => {
   if (mp.has_avatar_image) {
     return <S.AvatarImage src={`/api/mount-points/${mp.id}/avatar`} alt="" />
@@ -37,8 +38,8 @@ const mountAvatarContent = (mp: MountPoint): React.ReactNode => {
 
 type FolderLayoutItem = Extract<MountLayoutItem, { type: 'folder' }>
 const folderColor = (folder: FolderLayoutItem): string => {
-  const seed = [...folder.id].reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, 0)
-  return resolveAvatarColor(folder.avatar_color, seed)
+  if (!folder.avatar_color?.trim()) return 'transparent'
+  return resolveAvatarColor(folder.avatar_color, null)
 }
 const folderAvatarContent = (folder: FolderLayoutItem): React.ReactNode =>
   folder.has_avatar_image
@@ -699,6 +700,7 @@ const FolderAppearanceEditor: React.FC<FolderAppearanceEditorProps> = ({
         value={folder.avatar_color ?? ''}
         onChange={onColorChange}
         size={24}
+        emptyLabel="Transparent background"
       />
       <input
         ref={inputRef}

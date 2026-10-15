@@ -328,7 +328,7 @@ const MountPointsSettingsPage: React.FC = () => {
                           >
                             <Avatar
                               id={m.id}
-                              color={m.avatar_color}
+                              color={m.avatar_color?.trim() ? m.avatar_color : 'transparent'}
                               emoji={m.avatar_emoji}
                               imageUrl={m.has_avatar_image ? `/api/mount-points/${m.id}/avatar` : undefined}
                               labels={[m.name, m.slug]}
@@ -502,7 +502,7 @@ const MountPointsSettingsPage: React.FC = () => {
                     actually exists. */}
                 <Avatar
                   id={editingMount?.id ?? -1}
-                  color={form.avatar_color}
+                  color={form.avatar_color.trim() ? form.avatar_color : 'transparent'}
                   emoji={form.avatar_emoji}
                   imageUrl={avatarPreviewURL || (
                     editingMount?.has_avatar_image && !removeAvatarImage
@@ -516,6 +516,7 @@ const MountPointsSettingsPage: React.FC = () => {
                   <AvatarColorPicker
                     value={form.avatar_color}
                     onChange={(c) => setForm({ ...form, avatar_color: c })}
+                    emptyLabel="Transparent background"
                   />
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                     <Input

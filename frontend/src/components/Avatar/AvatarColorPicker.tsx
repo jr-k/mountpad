@@ -11,6 +11,8 @@ interface AvatarColorPickerProps {
   /** Optional override for the swatch diameter (defaults to 32px). */
   size?: number
   className?: string
+  /** Accessible label for the empty swatch. Defaults to automatic color. */
+  emptyLabel?: string
 }
 
 /**
@@ -25,7 +27,7 @@ interface AvatarColorPickerProps {
  * should automatically inherit changes to the palette.
  */
 export const AvatarColorPicker: React.FC<AvatarColorPickerProps> = ({
-  value, onChange, size = 32, className,
+  value, onChange, size = 32, className, emptyLabel = 'Automatic color',
 }) => {
   const norm = value.trim().toLowerCase()
   return (
@@ -39,8 +41,8 @@ export const AvatarColorPicker: React.FC<AvatarColorPickerProps> = ({
         $color="transparent"
         $active={norm === ''}
         onClick={() => onChange('')}
-        title="Use the automatic color"
-        aria-label="Automatic color"
+        title={emptyLabel}
+        aria-label={emptyLabel}
       />
       {AVATAR_PALETTE.map((c) => (
         <S.Swatch

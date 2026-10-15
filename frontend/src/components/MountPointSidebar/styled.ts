@@ -165,7 +165,9 @@ export const FolderAvatar = styled.span<{ $bg: string }>`
   border-radius: 8px;
   overflow: hidden;
   background: ${({ $bg }) => $bg};
-  color: ${({ $bg }) => (luminance($bg) > 0.55 ? '#1f2328' : '#ffffff')};
+  color: ${({ $bg, theme }) => ($bg === 'transparent'
+    ? theme.color.text
+    : luminance($bg) > 0.55 ? '#1f2328' : '#ffffff')};
   font-size: 18px;
   line-height: 1;
 `
@@ -247,9 +249,9 @@ export const Avatar = styled.span<{ $bg: string }>`
   font-size: 13px;
   text-transform: uppercase;
   user-select: none;
-  ${({ $bg }) => css`
+  ${({ $bg, theme }) => css`
     background: ${$bg};
-    color: ${luminance($bg) > 0.55 ? '#1f2328' : '#ffffff'};
+    color: ${$bg === 'transparent' ? theme.color.text : luminance($bg) > 0.55 ? '#1f2328' : '#ffffff'};
   `}
   /* Subtle inset ring so the avatar still has an edge against same
      coloured surfaces (e.g. white avatar on white drawer). */

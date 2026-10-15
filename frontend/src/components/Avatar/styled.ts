@@ -30,9 +30,9 @@ export const AvatarCircle = styled.span<{ $bg: string; $size: number }>`
   font-size: ${({ $size }) => Math.round($size * 0.46)}px;
   text-transform: uppercase;
   user-select: none;
-  ${({ $bg }) => css`
+  ${({ $bg, theme }) => css`
     background: ${$bg};
-    color: ${luminance($bg) > 0.55 ? '#1f2328' : '#ffffff'};
+    color: ${$bg === 'transparent' ? theme.color.text : luminance($bg) > 0.55 ? '#1f2328' : '#ffffff'};
   `}
   /* Subtle ring so the avatar still has an edge against same-coloured
      surfaces (e.g. white avatar on white modal). */
